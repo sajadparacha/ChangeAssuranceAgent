@@ -1,0 +1,10 @@
+Application: billing-service
+Environment: PROD
+
+Rollback steps:
+1. Restore only the package body of billing_pkg from the previous release artifact.
+2. Do not restore package specification.
+3. No table rollback is required (no table change in scope).
+
+Rollback verification:
+- Confirm package body status is VALID.

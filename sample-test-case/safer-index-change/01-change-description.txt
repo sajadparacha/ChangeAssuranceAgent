@@ -1,0 +1,1 @@
+Add supporting index on payments(id) for lookup performance. Schema-only change; no data updates.

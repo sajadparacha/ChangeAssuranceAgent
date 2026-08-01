@@ -1,0 +1,7 @@
+Test evidence for payments index change (UAT):
+
+Affected object: IDX_PAY_ID / payments table
+- Positive: payments lookup by id returns expected row — PASSED
+- Negative: query with non-existent id returns empty — PASSED
+- Rollback testing: drop index rehearsed in SIT; app remained available — PASSED
+- Post-deploy verification: explain plan uses IDX_PAY_ID — PASSED

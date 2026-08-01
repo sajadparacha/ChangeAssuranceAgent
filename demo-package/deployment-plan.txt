@@ -1,0 +1,3 @@
+Deploy package body only for billing_pkg.
+Owner: DBA team.
+No invalid-object verification is planned.

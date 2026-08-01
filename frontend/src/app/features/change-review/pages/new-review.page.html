@@ -1,0 +1,33 @@
+<section class="page">
+  <header>
+    <h1>AI Change Assurance Agent</h1>
+    <p>Submit a production change package for first-pass autonomous review.</p>
+    <a routerLink="/reviews">Review history</a>
+  </header>
+
+  @if (facade.error(); as err) {
+    <p class="error" role="alert">{{ err }}</p>
+  }
+
+  <form [formGroup]="form" (ngSubmit)="submit()" class="form-grid">
+    <mat-form-field appearance="outline"><mat-label>Application name</mat-label><input matInput formControlName="applicationName" /></mat-form-field>
+    <mat-form-field appearance="outline"><mat-label>Change title</mat-label><input matInput formControlName="changeTitle" /></mat-form-field>
+    <mat-form-field appearance="outline" class="full"><mat-label>Change description</mat-label><textarea matInput rows="3" formControlName="changeDescription"></textarea></mat-form-field>
+    <mat-form-field appearance="outline"><mat-label>Change type</mat-label>
+      <mat-select formControlName="changeType">
+        <mat-option value="UNKNOWN">UNKNOWN</mat-option>
+        <mat-option value="PLSQL">PLSQL</mat-option>
+        <mat-option value="DATABASE_SCHEMA">DATABASE_SCHEMA</mat-option>
+        <mat-option value="DATA_CHANGE">DATA_CHANGE</mat-option>
+        <mat-option value="MIXED">MIXED</mat-option>
+      </mat-select>
+    </mat-form-field>
+    <mat-form-field appearance="outline"><mat-label>Target environment</mat-label><input matInput formControlName="targetEnvironment" /></mat-form-field>
+    <mat-form-field appearance="outline" class="full"><mat-label>Implementation window</mat-label><input matInput formControlName="implementationWindow" /></mat-form-field>
+    <mat-form-field appearance="outline" class="full"><mat-label>Deployment plan</mat-label><textarea matInput rows="4" formControlName="deploymentPlan"></textarea></mat-form-field>
+    <mat-form-field appearance="outline" class="full"><mat-label>Rollback plan</mat-label><textarea matInput rows="4" formControlName="rollbackPlan"></textarea></mat-form-field>
+    <mat-form-field appearance="outline" class="full"><mat-label>Test evidence</mat-label><textarea matInput rows="4" formControlName="testEvidence"></textarea></mat-form-field>
+    <label class="full file">SQL / PL/SQL file <input type="file" accept=".sql,.pkb,.pks,.pls,.ddl,.txt" (change)="onFileSelected($event)" /></label>
+    <button mat-flat-button color="primary" type="submit" [disabled]="facade.loading()">Submit for review</button>
+  </form>
+</section>

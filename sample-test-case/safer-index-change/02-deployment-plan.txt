@@ -1,0 +1,13 @@
+Application: payments
+Environment: UAT
+Window: 2026-08-03 01:00–02:00 UTC
+
+Deployment order:
+1. Create index IDX_PAY_ID on payments(id) using online option where supported.
+2. Gather stats if required by DBA runbook.
+Execution responsibility: App DBA team.
+
+Post-deployment verification:
+- Confirm index IDX_PAY_ID exists and is VALID/USABLE.
+- Run explain plan for payments lookup query and compare to baseline.
+- Check invalid objects for payments schema.

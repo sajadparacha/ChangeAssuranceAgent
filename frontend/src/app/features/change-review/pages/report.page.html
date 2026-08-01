@@ -1,0 +1,39 @@
+<section class="page">
+  <h1>Assurance report</h1>
+  <a routerLink="/reviews">Back to history</a>
+  @if (facade.report(); as report) {
+    <mat-card>
+      <mat-card-title>Executive summary</mat-card-title>
+      <mat-card-content>
+        <p>{{ report.executiveSummary }}</p>
+        <p><strong>Recommendation:</strong> {{ report.recommendation.value }}</p>
+        <p><strong>Human approval required:</strong> {{ report.humanApprovalRequired }}</p>
+      </mat-card-content>
+    </mat-card>
+
+    <h2>Risk assessment</h2>
+    <pre>{{ report.riskAssessment | json }}</pre>
+
+    <h2>Findings by severity</h2>
+    @for (entry of report.findingsBySeverity | keyvalue; track entry.key) {
+      <h3>{{ entry.key }}</h3>
+      <ul>
+        @for (f of entry.value; track $index) {
+          <li>{{ f.ruleCode }} — {{ f.title }}</li>
+        }
+      </ul>
+    }
+
+    <h2>Risk scenarios (hypotheses)</h2>
+    <pre>{{ report.riskScenarios | json }}</pre>
+
+    <h2>Required actions</h2>
+    <ul>@for (a of report.requiredActions; track a) { <li>{{ a }}</li> }</ul>
+
+    <h2>Limitations</h2>
+    <ul>@for (l of report.limitations; track l) { <li>{{ l }}</li> }</ul>
+
+    <h2>Critic review</h2>
+    <pre>{{ report.criticReview | json }}</pre>
+  }
+</section>

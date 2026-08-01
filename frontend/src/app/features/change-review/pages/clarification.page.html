@@ -1,0 +1,17 @@
+<section class="page">
+  <h1>Clarification required</h1>
+  @if (facade.gaps()[0]; as gap) {
+    <p><strong>Gap:</strong> {{ gap.description }}</p>
+    <p><strong>Why required:</strong> {{ gap.reasonRequired }}</p>
+    <p><strong>Question:</strong> {{ gap.suggestedQuestion }}</p>
+    <form [formGroup]="form" (ngSubmit)="submit()">
+      <mat-form-field appearance="outline" class="full">
+        <mat-label>Your answer</mat-label>
+        <textarea matInput rows="6" formControlName="answer"></textarea>
+      </mat-form-field>
+      <button mat-flat-button color="primary" type="submit" [disabled]="facade.loading()">Submit answer</button>
+    </form>
+  } @else {
+    <p>No open clarification gaps.</p>
+  }
+</section>

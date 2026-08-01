@@ -1,0 +1,1 @@
+CREATE INDEX IDX_PAY_ID ON payments(id);

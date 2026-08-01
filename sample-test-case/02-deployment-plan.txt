@@ -1,0 +1,14 @@
+Application: billing-service
+Environment: PROD
+Window: 2026-08-02 02:00–04:00 UTC
+
+Deployment order:
+1. Deploy package body only for billing_pkg.
+2. No table changes are included in this release.
+3. Owner / execution responsibility: DBA team (on-call).
+
+Post-deployment verification:
+- Confirm package body compiles.
+- Smoke-check one billing API happy path.
+
+Note: invalid-object verification is not planned for this change.

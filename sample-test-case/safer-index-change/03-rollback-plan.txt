@@ -1,0 +1,10 @@
+Application: payments
+Environment: UAT
+
+Rollback order (reverse of deploy):
+1. Drop index IDX_PAY_ID.
+2. Re-check invalid objects.
+
+Rollback verification:
+- Confirm IDX_PAY_ID is absent.
+- Confirm application lookup queries still succeed (may be slower).

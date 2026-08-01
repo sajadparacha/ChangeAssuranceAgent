@@ -1,0 +1,42 @@
+<section class="page">
+  <h1>Review progress</h1>
+  @if (facade.loading()) { <mat-progress-bar mode="indeterminate"></mat-progress-bar> }
+  @if (facade.error(); as err) { <p class="error">{{ err }}</p> }
+  @if (facade.activeReview(); as review) {
+    <mat-card>
+      <mat-card-header>
+        <mat-card-title>{{ review.changeTitle }}</mat-card-title>
+        <mat-card-subtitle>{{ review.reviewId }} · {{ review.applicationName }}</mat-card-subtitle>
+      </mat-card-header>
+      <mat-card-content>
+        <p><strong>Stage:</strong> {{ review.currentStage }}</p>
+        <p><strong>Status:</strong> {{ review.status }}</p>
+        <p><strong>Recommendation:</strong> {{ review.recommendation || 'Pending' }}</p>
+      </mat-card-content>
+    </mat-card>
+
+    <h2>Review plan</h2>
+    <pre>{{ facade.plan() | json }}</pre>
+
+    <h2>Tool activity</h2>
+    <ul>
+      @for (a of facade.activities(); track $index) {
+        <li>{{ a.toolType }} — {{ a.status }} — {{ a.safeReasonSummary }}</li>
+      }
+    </ul>
+
+    <h2>Information gaps</h2>
+    <ul>
+      @for (g of facade.gaps(); track $index) {
+        <li>{{ g.description }} ({{ g.resolutionStatus }})</li>
+      }
+    </ul>
+
+    @if (facade.isWaitingForInformation()) {
+      <a [routerLink]="['/reviews', review.reviewId, 'clarification']">Answer clarification</a>
+    }
+    @if (facade.isCompleted()) {
+      <a [routerLink]="['/reviews', review.reviewId, 'report']">Open final report</a>
+    }
+  }
+</section>
