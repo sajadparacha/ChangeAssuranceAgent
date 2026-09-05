@@ -9,7 +9,13 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * <p>Runnable as an executable WAR ({@code java -jar}) or deployed to an external
  * servlet container such as WebLogic 15.x via {@link ChangeAssuranceServletInitializer}.
  */
-@SpringBootApplication
+@SpringBootApplication(exclude = {
+        org.springframework.ai.model.openai.autoconfigure.OpenAiAudioSpeechAutoConfiguration.class,
+        org.springframework.ai.model.openai.autoconfigure.OpenAiAudioTranscriptionAutoConfiguration.class,
+        org.springframework.ai.model.openai.autoconfigure.OpenAiImageAutoConfiguration.class,
+        org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration.class,
+        org.springframework.ai.model.openai.autoconfigure.OpenAiModerationAutoConfiguration.class
+})
 public class ChangeAssuranceApplication {
 
     public static void main(String[] args) {
