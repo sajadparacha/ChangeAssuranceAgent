@@ -18,6 +18,11 @@ public final class DisabledModelGateway implements ModelGateway {
     }
 
     @Override
+    public String defaultModel() {
+        return "none";
+    }
+
+    @Override
     public <T> T execute(AiTaskType taskType, AiRequest request, Class<T> responseType) {
         Objects.requireNonNull(taskType, "taskType must not be null");
         throw new AiUnavailableException(

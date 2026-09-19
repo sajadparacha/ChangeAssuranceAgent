@@ -12,12 +12,14 @@ import com.company.changeassurance.application.port.out.ModelGateway;
 import com.company.changeassurance.domain.exception.AiUnavailableException;
 import com.company.changeassurance.domain.model.ActorType;
 import com.company.changeassurance.domain.model.AiAssessment;
+import com.company.changeassurance.domain.model.AiContributionEntry;
 import com.company.changeassurance.domain.model.AiTaskType;
 import com.company.changeassurance.domain.model.ChangeClassification;
 import com.company.changeassurance.domain.model.ChangeReview;
 import com.company.changeassurance.domain.model.ChangeType;
 import com.company.changeassurance.domain.model.Complexity;
 import com.company.changeassurance.domain.model.CriticResult;
+import com.company.changeassurance.domain.model.Evidence;
 import com.company.changeassurance.domain.model.EvidenceId;
 import com.company.changeassurance.domain.model.Finding;
 import com.company.changeassurance.domain.model.InformationGap;
@@ -53,7 +55,15 @@ public class AiReasoningService {
 
     public ChangeClassification classify(ChangeReview review, SqlParseResult parseResult) {
         if (!modelGateway.isAvailable()) {
-            return deterministicClassification(review, parseResult);
+            ChangeClassification deterministic = deterministicClassification(review, parseResult);
+            review.addAiContribution(new AiContributionEntry(
+                    "Change classification",
+                    "Identify change type, complexity, and which assurance capabilities to run",
+                    AiContributionEntry.DETERMINISTIC_RULES,
+                    "Model gateway unavailable; used SQL/heuristic classification ("
+                            + deterministic.primaryChangeType() + ")"
+            ));
+            return deterministic;
         }
         try {
             ModelGateway.AiRequest request = new ModelGateway.AiRequest(
@@ -61,13 +71,32 @@ public class AiReasoningService {
                     PROMPT_VERSION,
                     delimitUntrusted(buildClassificationPayload(review, parseResult)),
                     8000,
-                    2000
+                    2000,
+                    review.getPreferredAiModel(),
+                    review.getPreferredAiProvider()
             );
             ChangeClassification fromModel = modelGateway.execute(
                     AiTaskType.CHANGE_CLASSIFICATION, request, ChangeClassification.class);
-            return validateClassification(fromModel, review);
+            ChangeClassification validated = validateClassification(fromModel, review);
+            review.addAiContribution(new AiContributionEntry(
+                    "Change classification",
+                    "Identify change type, complexity, and which assurance capabilities to run",
+                    AiContributionEntry.LIVE_MODEL,
+                    "Model classified as " + validated.primaryChangeType()
+                            + " / " + validated.complexity()
+                            + " using " + modelLabel(review)
+            ));
+            return validated;
         } catch (RuntimeException ex) {
-            return deterministicClassification(review, parseResult);
+            ChangeClassification deterministic = deterministicClassification(review, parseResult);
+            review.addAiContribution(new AiContributionEntry(
+                    "Change classification",
+                    "Identify change type, complexity, and which assurance capabilities to run",
+                    AiContributionEntry.DETERMINISTIC_RULES,
+                    "Live model call failed; fell back to SQL/heuristic classification ("
+                            + deterministic.primaryChangeType() + ")"
+            ));
+            return deterministic;
         }
     }
 
@@ -77,32 +106,59 @@ public class AiReasoningService {
         List<String> reasons = new ArrayList<>();
         int seq = 1;
         for (ReviewCapability capability : classification.requiredReviewCapabilities()) {
-            ToolType tool = mapCapability(capability);
-            if (tool == null || tools.contains(tool)) {
-                continue;
+            List<ToolType> mapped = mapCapabilityTools(capability);
+            for (ToolType tool : mapped) {
+                if (tools.contains(tool)) {
+                    continue;
+                }
+                tools.add(tool);
+                reasons.add("Capability " + capability + " requires " + tool);
+                steps.add(new ReviewPlanStep(
+                        new PlanStepId(idGenerator.nextStepId()),
+                        seq++,
+                        capability,
+                        tool,
+                        "Execute " + tool + " for " + capability,
+                        List.of(),
+                        PlanStepStatus.PENDING,
+                        classification.evidenceIds()
+                ));
             }
-            tools.add(tool);
-            reasons.add("Capability " + capability + " requires " + tool);
-            steps.add(new ReviewPlanStep(
-                    new PlanStepId(idGenerator.nextStepId()),
-                    seq++,
-                    capability,
-                    tool,
-                    "Execute " + tool + " for " + capability,
-                    List.of(),
-                    PlanStepStatus.PENDING,
-                    classification.evidenceIds()
-            ));
         }
         if (tools.isEmpty()) {
-            tools.addAll(List.of(
-                    ToolType.CHECK_CHANGE_PACKAGE_COMPLETENESS,
-                    ToolType.ANALYZE_SQL_SCRIPT,
-                    ToolType.COMPARE_DEPLOYMENT_AND_ROLLBACK,
-                    ToolType.ANALYZE_TEST_EVIDENCE_COVERAGE,
-                    ToolType.CHECK_CROSS_DOCUMENT_CONSISTENCY
-            ));
+            if (review.isPackageImpactMode() && !review.hasSubmittedChangePackageDocs()) {
+                tools.addAll(defaultPackageImpactTools());
+                reasons.add("Package-impact mode uses discrete Oracle read-only tools");
+            } else {
+                tools.addAll(List.of(
+                        ToolType.CHECK_CHANGE_PACKAGE_COMPLETENESS,
+                        ToolType.ANALYZE_SQL_SCRIPT,
+                        ToolType.CHECK_CROSS_DOCUMENT_CONSISTENCY
+                ));
+                if (notBlank(review.getDeploymentPlan()) || notBlank(review.getRollbackPlan())) {
+                    tools.add(ToolType.COMPARE_DEPLOYMENT_AND_ROLLBACK);
+                }
+                if (notBlank(review.getTestEvidence())) {
+                    tools.add(ToolType.ANALYZE_TEST_EVIDENCE_COVERAGE);
+                }
+            }
         }
+        if (review.isPackageImpactMode()) {
+            List<ToolType> packageTools = defaultPackageImpactTools();
+            for (int i = packageTools.size() - 1; i >= 0; i--) {
+                ToolType tool = packageTools.get(i);
+                if (!tools.contains(tool)) {
+                    tools.add(0, tool);
+                    reasons.add("Package impact mode requires " + tool);
+                }
+            }
+        }
+        review.addAiContribution(new AiContributionEntry(
+                "Review planning",
+                "Choose approved assurance tools from the classified capabilities",
+                AiContributionEntry.DETERMINISTIC_RULES,
+                "Mapped " + tools.size() + " approved tool(s); no free-form tool invention"
+        ));
         return new ReviewPlan(
                 new PlanId(idGenerator.nextPlanId()),
                 review.getReviewId(),
@@ -113,6 +169,25 @@ public class AiReasoningService {
                 1,
                 ActorType.AI,
                 List.of()
+        );
+    }
+
+    /** Baseline tools for package-only impact investigations (follow-ups may add more). */
+    public static List<ToolType> defaultPackageImpactTools() {
+        return List.of(
+                ToolType.GET_PACKAGE_OBJECT_INFO,
+                ToolType.ANALYZE_DIRECT_DEPENDENTS,
+                ToolType.ANALYZE_PACKAGE_DEPENDENCIES,
+                ToolType.ANALYZE_SCHEDULER_JOBS,
+                ToolType.ANALYZE_RELATED_OBJECT_HEALTH
+        );
+    }
+
+    /** Follow-up tools that may be appended by the investigation loop. */
+    public static List<ToolType> packageImpactFollowUpTools() {
+        return List.of(
+                ToolType.ANALYZE_TRANSITIVE_DEPENDENTS,
+                ToolType.ANALYZE_SOURCE_REFERENCES
         );
     }
 
@@ -133,7 +208,9 @@ public class AiReasoningService {
                             PROMPT_VERSION,
                             delimitUntrusted("gaps=" + review.getInformationGaps()),
                             4000,
-                            1000
+                            1000,
+                            review.getPreferredAiModel(),
+                            review.getPreferredAiProvider()
                     ),
                     List.class
             );
@@ -202,17 +279,38 @@ public class AiReasoningService {
                     true
             ));
         }
+        review.addAiContribution(new AiContributionEntry(
+                "Risk scenario generation",
+                "Propose failure hypotheses for human validation (not proven defects)",
+                AiContributionEntry.DETERMINISTIC_RULES,
+                "Generated " + scenarios.size()
+                        + " hypothesis scenario(s) from deterministic findings (not a free-form model essay)"
+        ));
         return scenarios;
     }
 
     public AiAssessment draftReport(ChangeReview review) {
         if (!modelGateway.isAvailable()) {
+            review.addAiContribution(new AiContributionEntry(
+                    "Draft report narrative",
+                    "Write executive summary, suggested tests, and human-review questions",
+                    AiContributionEntry.SKIPPED,
+                    "Model gateway unavailable; report uses deterministic executive summary"
+            ));
             return AiAssessment.unavailable();
         }
         List<EvidenceId> cited = review.getEvidence().stream().map(e -> e.evidenceId()).limit(10).toList();
         String summary = "First-pass assurance review for " + review.getChangeTitle()
                 + " on " + review.getApplicationName() + ". Deterministic findings: "
                 + review.getFindings().size() + ". Human approval remains mandatory.";
+        review.addAiContribution(new AiContributionEntry(
+                "Draft report narrative",
+                "Write executive summary, suggested tests, and human-review questions",
+                AiContributionEntry.TEMPLATE,
+                "Gateway available (" + modelLabel(review)
+                        + "); narrative currently assembled from a controlled template citing "
+                        + cited.size() + " evidence id(s), not an unconstrained essay"
+        ));
         return new AiAssessment(
                 "AVAILABLE",
                 summary,
@@ -231,13 +329,21 @@ public class AiReasoningService {
                         "Who owns production verification?"
                 ),
                 cited,
-                modelGateway.getClass().getSimpleName(),
+                review.getPreferredAiModel() == null || review.getPreferredAiModel().isBlank()
+                        ? modelGateway.defaultModel()
+                        : review.getPreferredAiModel(),
                 PROMPT_VERSION
         );
     }
 
     public CriticResult critic(ChangeReview review) {
         if (!modelGateway.isAvailable()) {
+            review.addAiContribution(new AiContributionEntry(
+                    "Critic review",
+                    "Check for weak evidence links and unsupported claims before human approval",
+                    AiContributionEntry.SKIPPED,
+                    "Model gateway unavailable; critic pass skipped"
+            ));
             return CriticResult.unavailable();
         }
         List<String> weak = new ArrayList<>();
@@ -247,6 +353,14 @@ public class AiReasoningService {
             }
         }
         boolean overrideAttempt = false;
+        review.addAiContribution(new AiContributionEntry(
+                "Critic review",
+                "Check for weak evidence links and unsupported claims before human approval",
+                AiContributionEntry.DETERMINISTIC_RULES,
+                weak.isEmpty()
+                        ? "No findings lacked evidence references"
+                        : "Flagged " + weak.size() + " finding(s) with weak evidence references"
+        ));
         return new CriticResult(
                 "AVAILABLE",
                 weak.isEmpty(),
@@ -262,6 +376,18 @@ public class AiReasoningService {
     }
 
     private ChangeClassification deterministicClassification(ChangeReview review, SqlParseResult parseResult) {
+        if (review.isPackageImpactMode() && !review.hasSubmittedChangePackageDocs()) {
+            List<EvidenceId> evidenceIds = review.getEvidence().stream().map(Evidence::evidenceId).limit(5).toList();
+            return new ChangeClassification(
+                    ChangeType.PLSQL,
+                    List.of(ChangeType.PLSQL),
+                    Complexity.MEDIUM,
+                    0.9d,
+                    List.of(ReviewCapability.DEPENDENCY_IMPACT),
+                    evidenceIds
+            );
+        }
+
         Set<ChangeType> secondary = EnumSet.noneOf(ChangeType.class);
         ChangeType primary = ChangeType.UNKNOWN;
         boolean plsql = false;
@@ -286,6 +412,9 @@ public class AiReasoningService {
                 }
             }
         }
+        if (review.isPackageImpactMode()) {
+            plsql = true;
+        }
         if (plsql) {
             secondary.add(ChangeType.PLSQL);
             primary = ChangeType.PLSQL;
@@ -306,13 +435,22 @@ public class AiReasoningService {
                 : (secondary.isEmpty() ? Complexity.UNKNOWN : Complexity.MEDIUM);
 
         List<ReviewCapability> capabilities = new ArrayList<>();
+        if (review.isPackageImpactMode()) {
+            capabilities.add(ReviewCapability.DEPENDENCY_IMPACT);
+        }
         capabilities.add(ReviewCapability.PACKAGE_COMPLETENESS);
         capabilities.add(ReviewCapability.SQL_SAFETY);
-        capabilities.add(ReviewCapability.ROLLBACK_COVERAGE);
-        capabilities.add(ReviewCapability.TEST_COVERAGE);
+        boolean hasDeployOrRollback = notBlank(review.getDeploymentPlan()) || notBlank(review.getRollbackPlan());
+        boolean hasTestEvidence = notBlank(review.getTestEvidence());
+        if (hasDeployOrRollback) {
+            capabilities.add(ReviewCapability.ROLLBACK_COVERAGE);
+        }
+        if (hasTestEvidence) {
+            capabilities.add(ReviewCapability.TEST_COVERAGE);
+        }
         capabilities.add(ReviewCapability.CROSS_DOCUMENT_CONSISTENCY);
 
-        List<EvidenceId> evidenceIds = review.getEvidence().stream().map(e -> e.evidenceId()).limit(5).toList();
+        List<EvidenceId> evidenceIds = review.getEvidence().stream().map(Evidence::evidenceId).limit(5).toList();
         return new ChangeClassification(
                 primary,
                 List.copyOf(secondary),
@@ -327,17 +465,46 @@ public class AiReasoningService {
         if (c == null) {
             return deterministicClassification(review, null);
         }
-        // Enum/confidence already validated by record constructors
-        return c;
+        List<ReviewCapability> caps = new ArrayList<>(c.requiredReviewCapabilities());
+        boolean changed = false;
+        if (review.isPackageImpactMode()
+                && !caps.contains(ReviewCapability.DEPENDENCY_IMPACT)) {
+            caps.add(0, ReviewCapability.DEPENDENCY_IMPACT);
+            changed = true;
+        }
+        // Do not force deploy/rollback/test tools when those artifacts were not submitted.
+        if (!notBlank(review.getDeploymentPlan()) && !notBlank(review.getRollbackPlan())
+                && caps.remove(ReviewCapability.ROLLBACK_COVERAGE)) {
+            changed = true;
+        }
+        if (!notBlank(review.getTestEvidence()) && caps.remove(ReviewCapability.TEST_COVERAGE)) {
+            changed = true;
+        }
+        if (!changed) {
+            return c;
+        }
+        return new ChangeClassification(
+                c.primaryChangeType() == ChangeType.UNKNOWN && review.isPackageImpactMode()
+                        ? ChangeType.PLSQL
+                        : c.primaryChangeType(),
+                c.secondaryChangeTypes().isEmpty() && review.isPackageImpactMode()
+                        ? List.of(ChangeType.PLSQL)
+                        : c.secondaryChangeTypes(),
+                c.complexity(),
+                c.confidence(),
+                caps,
+                c.evidenceIds()
+        );
     }
 
-    private ToolType mapCapability(ReviewCapability capability) {
+    private List<ToolType> mapCapabilityTools(ReviewCapability capability) {
         return switch (capability) {
-            case PACKAGE_COMPLETENESS -> ToolType.CHECK_CHANGE_PACKAGE_COMPLETENESS;
-            case SQL_SAFETY, SECURITY_REVIEW -> ToolType.ANALYZE_SQL_SCRIPT;
-            case ROLLBACK_COVERAGE -> ToolType.COMPARE_DEPLOYMENT_AND_ROLLBACK;
-            case TEST_COVERAGE -> ToolType.ANALYZE_TEST_EVIDENCE_COVERAGE;
-            case CROSS_DOCUMENT_CONSISTENCY, DEPENDENCY_IMPACT, POLICY_REVIEW -> ToolType.CHECK_CROSS_DOCUMENT_CONSISTENCY;
+            case PACKAGE_COMPLETENESS -> List.of(ToolType.CHECK_CHANGE_PACKAGE_COMPLETENESS);
+            case SQL_SAFETY, SECURITY_REVIEW -> List.of(ToolType.ANALYZE_SQL_SCRIPT);
+            case ROLLBACK_COVERAGE -> List.of(ToolType.COMPARE_DEPLOYMENT_AND_ROLLBACK);
+            case TEST_COVERAGE -> List.of(ToolType.ANALYZE_TEST_EVIDENCE_COVERAGE);
+            case DEPENDENCY_IMPACT -> defaultPackageImpactTools();
+            case CROSS_DOCUMENT_CONSISTENCY, POLICY_REVIEW -> List.of(ToolType.CHECK_CROSS_DOCUMENT_CONSISTENCY);
         };
     }
 
@@ -355,5 +522,21 @@ public class AiReasoningService {
                 %s
                 <<<END_UNTRUSTED_USER_CONTENT>>>
                 """.formatted(content == null ? "" : content);
+    }
+
+    private static boolean notBlank(String value) {
+        return value != null && !value.isBlank();
+    }
+
+    private String modelLabel(ChangeReview review) {
+        String provider = review.getPreferredAiProvider();
+        String model = review.getPreferredAiModel();
+        if (model == null || model.isBlank()) {
+            model = modelGateway.defaultModel();
+        }
+        if (provider == null || provider.isBlank()) {
+            return model;
+        }
+        return provider + " / " + model;
     }
 }

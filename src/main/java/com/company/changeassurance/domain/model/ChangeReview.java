@@ -5,6 +5,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+import com.company.changeassurance.domain.db.PackageDbImpact;
+import com.company.changeassurance.domain.sql.PackageDeployDelta;
+
 /**
  * Aggregate root for a change assurance review.
  *
@@ -19,12 +22,18 @@ public final class ChangeReview {
     private String changeDescription;
     private String targetEnvironment;
     private String implementationWindow;
+    private String packageName;
+    private String schemaOwner;
+    private PackageDbImpact packageDbImpact;
+    private PackageDeployDelta packageDeployDelta;
     private String deploymentPlan;
     private String rollbackPlan;
     private String testEvidence;
     private String sqlContent;
     private String sqlFilename;
     private String sqlStorageKey;
+    private String preferredAiModel;
+    private String preferredAiProvider;
     private List<String> deterministicReasonCodes;
     private ChangeType submittedChangeType;
     private ReviewStatus reviewStatus;
@@ -38,6 +47,7 @@ public final class ChangeReview {
     private final List<String> clarificationQuestions;
     private final List<ClarificationAnswer> userAnswers;
     private final List<RiskScenario> riskScenarios;
+    private final List<AiContributionEntry> aiContributions;
     private RiskAssessment riskAssessment;
     private ReadinessRecommendation readinessRecommendation;
     private AiAssessment aiAssessment;
@@ -73,6 +83,7 @@ public final class ChangeReview {
         this.clarificationQuestions = new ArrayList<>();
         this.userAnswers = new ArrayList<>();
         this.riskScenarios = new ArrayList<>();
+        this.aiContributions = new ArrayList<>();
         this.humanReviewStatus = HumanReviewStatus.PENDING;
         this.createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
         this.stageTransitions = new ArrayList<>();
@@ -93,6 +104,35 @@ public final class ChangeReview {
         this.sqlContent = sqlContent;
         this.sqlFilename = sqlFilename;
         this.sqlStorageKey = sqlStorageKey;
+    }
+
+    public void setPackageTarget(String packageName, String schemaOwner) {
+        this.packageName = blankToNull(packageName);
+        this.schemaOwner = blankToNull(schemaOwner);
+        if (this.packageName != null) {
+            this.packageName = this.packageName.trim().toUpperCase();
+        }
+        if (this.schemaOwner != null) {
+            this.schemaOwner = this.schemaOwner.trim().toUpperCase();
+        }
+    }
+
+    public void setPackageDeployDelta(PackageDeployDelta packageDeployDelta) {
+        this.packageDeployDelta = packageDeployDelta == null
+                ? PackageDeployDelta.none()
+                : packageDeployDelta;
+    }
+
+    public boolean isPackageImpactMode() {
+        return packageName != null && !packageName.isBlank();
+    }
+
+    public boolean hasSubmittedChangePackageDocs() {
+        return notBlank(changeDescription)
+                || notBlank(deploymentPlan)
+                || notBlank(rollbackPlan)
+                || notBlank(testEvidence)
+                || notBlank(sqlContent);
     }
 
     public void transitionTo(
@@ -159,6 +199,26 @@ public final class ChangeReview {
         return implementationWindow;
     }
 
+    public String getPackageName() {
+        return packageName;
+    }
+
+    public String getSchemaOwner() {
+        return schemaOwner;
+    }
+
+    public PackageDbImpact getPackageDbImpact() {
+        return packageDbImpact;
+    }
+
+    public void setPackageDbImpact(PackageDbImpact packageDbImpact) {
+        this.packageDbImpact = packageDbImpact;
+    }
+
+    public PackageDeployDelta getPackageDeployDelta() {
+        return packageDeployDelta == null ? PackageDeployDelta.none() : packageDeployDelta;
+    }
+
     public String getDeploymentPlan() {
         return deploymentPlan;
     }
@@ -181,6 +241,30 @@ public final class ChangeReview {
 
     public String getSqlStorageKey() {
         return sqlStorageKey;
+    }
+
+    public String getPreferredAiModel() {
+        return preferredAiModel;
+    }
+
+    public void setPreferredAiModel(String preferredAiModel) {
+        if (preferredAiModel == null || preferredAiModel.isBlank()) {
+            this.preferredAiModel = null;
+        } else {
+            this.preferredAiModel = preferredAiModel.trim();
+        }
+    }
+
+    public String getPreferredAiProvider() {
+        return preferredAiProvider;
+    }
+
+    public void setPreferredAiProvider(String preferredAiProvider) {
+        if (preferredAiProvider == null || preferredAiProvider.isBlank()) {
+            this.preferredAiProvider = null;
+        } else {
+            this.preferredAiProvider = preferredAiProvider.trim();
+        }
     }
 
     public List<String> getDeterministicReasonCodes() {
@@ -282,6 +366,14 @@ public final class ChangeReview {
         riskScenarios.add(Objects.requireNonNull(scenario));
     }
 
+    public List<AiContributionEntry> getAiContributions() {
+        return List.copyOf(aiContributions);
+    }
+
+    public void addAiContribution(AiContributionEntry entry) {
+        aiContributions.add(Objects.requireNonNull(entry));
+    }
+
     public RiskAssessment getRiskAssessment() {
         return riskAssessment;
     }
@@ -340,5 +432,13 @@ public final class ChangeReview {
             throw new IllegalArgumentException(fieldName + " must not be blank");
         }
         return value;
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private static boolean notBlank(String value) {
+        return value != null && !value.isBlank();
     }
 }

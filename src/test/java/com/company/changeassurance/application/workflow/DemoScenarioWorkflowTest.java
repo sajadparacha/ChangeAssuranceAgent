@@ -19,6 +19,7 @@ import com.company.changeassurance.domain.model.ReviewStatus;
 @SpringBootTest
 @TestPropertySource(properties = {
         "changeassurance.ai.mode=fake",
+        "changeassurance.db-metadata.mode=fake",
         "changeassurance.storage.root=${java.io.tmpdir}/caa-uploads-test"
 })
 class DemoScenarioWorkflowTest {

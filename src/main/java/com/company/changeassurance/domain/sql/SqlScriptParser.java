@@ -26,14 +26,16 @@ public final class SqlScriptParser {
             "(?i)\\b([A-Z][A-Z0-9_$#]*)\\.(?:[A-Z][A-Z0-9_$#]*)\\b");
     private static final Pattern OBJECT_AFTER = Pattern.compile(
             "(?i)\\b(?:TABLE|INDEX|VIEW|SEQUENCE|PACKAGE(?:\\s+BODY)?|PROCEDURE|FUNCTION|TRIGGER|TYPE)\\s+"
-                    + "(?:IF\\s+(?:NOT\\s+)?EXISTS\\s+)?(?:\"?[A-Z0-9_$#]+\"?\\.)?\"?([A-Z0-9_$#]+)\"?");
+                    + "(?:IF\\s+(?:NOT\\s+)?EXISTS\\s+)?"
+                    + "(?:\"?([A-Z0-9_$#]+)\"?\\.)?\"?([A-Z0-9_$#]+)\"?");
     private static final Pattern UPDATE_TARGET = Pattern.compile(
-            "(?i)\\bUPDATE\\s+(?:\"?[A-Z0-9_$#]+\"?\\.)?\"?([A-Z0-9_$#]+)\"?");
+            "(?i)\\bUPDATE\\s+(?:\"?([A-Z0-9_$#]+)\"?\\.)?\"?([A-Z0-9_$#]+)\"?");
     private static final Pattern DELETE_TARGET = Pattern.compile(
-            "(?i)\\bDELETE\\s+FROM\\s+(?:\"?[A-Z0-9_$#]+\"?\\.)?\"?([A-Z0-9_$#]+)\"?");
+            "(?i)\\bDELETE\\s+FROM\\s+(?:\"?([A-Z0-9_$#]+)\"?\\.)?\"?([A-Z0-9_$#]+)\"?");
     private static final Pattern DROP_TARGET = Pattern.compile(
             "(?i)\\bDROP\\s+(?:TABLE|INDEX|VIEW|SEQUENCE|PACKAGE(?:\\s+BODY)?|PROCEDURE|FUNCTION|TRIGGER)\\s+"
-                    + "(?:IF\\s+EXISTS\\s+)?(?:\"?[A-Z0-9_$#]+\"?\\.)?\"?([A-Z0-9_$#]+)\"?");
+                    + "(?:IF\\s+EXISTS\\s+)?"
+                    + "(?:\"?([A-Z0-9_$#]+)\"?\\.)?\"?([A-Z0-9_$#]+)\"?");
     private static final Pattern GRANT_REVOKE = Pattern.compile("(?i)\\b(GRANT|REVOKE)\\b");
     private static final Pattern DYNAMIC_SQL = Pattern.compile("(?i)\\b(EXECUTE\\s+IMMEDIATE|DBMS_SQL)\\b");
     private static final Pattern WHERE = Pattern.compile("(?i)\\bWHERE\\b");
@@ -150,8 +152,10 @@ public final class SqlScriptParser {
         int startLine = 1;
         boolean inSingle = false;
         boolean inDouble = false;
-        int plsqlDepth = 0;
-        boolean inPlsqlBlock = false;
+        // CREATE PACKAGE/BODY/PROCEDURE/FUNCTION/TRIGGER/TYPE stays open until '/' —
+        // nested END of inner routines must not close the unit (avoids false SQL-009).
+        boolean inCreateUnit = false;
+        int beginDepth = 0;
 
         for (int i = 0; i < content.length(); i++) {
             char c = content.charAt(i);
@@ -185,59 +189,51 @@ public final class SqlScriptParser {
                 continue;
             }
 
-            // Detect CREATE OR REPLACE PACKAGE / BEGIN..END blocks heuristically
             String ahead = content.substring(i, Math.min(content.length(), i + 32)).toUpperCase(Locale.ROOT);
-            if (!inPlsqlBlock && (ahead.startsWith("CREATE ") || ahead.startsWith("CREATE\t") || ahead.startsWith("CREATE\n"))) {
-                String window = content.substring(i, Math.min(content.length(), i + 120)).toUpperCase(Locale.ROOT);
-                if (window.contains("PACKAGE") || window.contains("PROCEDURE") || window.contains("FUNCTION") || window.contains("TRIGGER") || window.contains("TYPE ")) {
-                    inPlsqlBlock = true;
-                    plsqlDepth = 0;
-                }
-            }
-            if (inPlsqlBlock) {
-                if (ahead.startsWith("BEGIN") && (ahead.length() == 5 || !Character.isLetterOrDigit(ahead.charAt(5)))) {
-                    plsqlDepth++;
-                }
-                if (ahead.startsWith("END") && (ahead.length() == 3 || !Character.isLetterOrDigit(ahead.charAt(3)))) {
-                    // look for END; 
-                    int j = i;
-                    while (j < content.length() && content.charAt(j) != ';' && content.charAt(j) != '\n') {
-                        j++;
-                    }
-                    if (j < content.length() && content.charAt(j) == ';') {
-                        plsqlDepth = Math.max(0, plsqlDepth - 1);
-                        current.append(content, i, j + 1);
-                        i = j;
-                        if (plsqlDepth == 0) {
-                            // check if this closes package with /
-                            inPlsqlBlock = false;
-                            String text = current.toString().trim();
-                            if (!text.isEmpty()) {
-                                segments.add(new Segment(startLine, text));
-                            }
-                            current.setLength(0);
-                            startLine = line;
-                            // optional slash terminator
-                            continue;
-                        }
-                        continue;
-                    }
+            if (!inCreateUnit && isCreateKeyword(ahead)) {
+                String window = content.substring(i, Math.min(content.length(), i + 140)).toUpperCase(Locale.ROOT);
+                if (isPlsqlCreateUnit(window)) {
+                    inCreateUnit = true;
+                    beginDepth = 0;
                 }
             }
 
-            if (c == ';' && !inPlsqlBlock) {
-                current.append(c);
-                String text = current.toString().trim();
-                if (!text.isEmpty() && !"/".equals(text)) {
-                    segments.add(new Segment(startLine, text));
+            if (isKeywordAt(ahead, "BEGIN")) {
+                beginDepth++;
+            }
+
+            if (isKeywordAt(ahead, "END")) {
+                int endSemi = indexOfStatementEnd(content, i);
+                if (endSemi >= 0) {
+                    if (beginDepth > 0) {
+                        beginDepth--;
+                    }
+                    current.append(content, i, endSemi + 1);
+                    i = endSemi;
+                    // Anonymous BEGIN..END only — never close CREATE PACKAGE/BODY on nested END.
+                    if (!inCreateUnit && beginDepth == 0) {
+                        emitSegment(segments, current, startLine);
+                        startLine = line;
+                    }
+                    continue;
                 }
-                current.setLength(0);
-                startLine = line;
+            }
+
+            // SQL*Plus style terminator for CREATE units
+            if (c == '/' && isSlashTerminator(content, i, current)) {
+                if (inCreateUnit || current.length() > 0) {
+                    emitSegment(segments, current, startLine);
+                    inCreateUnit = false;
+                    beginDepth = 0;
+                    startLine = line;
+                }
                 continue;
             }
 
-            if (c == '/' && current.toString().trim().isEmpty() && inPlsqlBlock == false) {
-                // standalone slash — ignore
+            if (c == ';' && !inCreateUnit && beginDepth == 0) {
+                current.append(c);
+                emitSegment(segments, current, startLine);
+                startLine = line;
                 continue;
             }
 
@@ -247,17 +243,79 @@ public final class SqlScriptParser {
             }
             current.append(c);
         }
-        String trailing = current.toString().trim();
-        if (!trailing.isEmpty()) {
-            segments.add(new Segment(startLine, trailing));
-        }
+        emitSegment(segments, current, startLine);
         return segments;
+    }
+
+    private static void emitSegment(List<Segment> segments, StringBuilder current, int startLine) {
+        String text = current.toString().trim();
+        if (!text.isEmpty() && !"/".equals(text)) {
+            segments.add(new Segment(startLine, text));
+        }
+        current.setLength(0);
+    }
+
+    private static boolean isCreateKeyword(String ahead) {
+        return ahead.startsWith("CREATE")
+                && (ahead.length() == 6 || !Character.isLetterOrDigit(ahead.charAt(6)));
+    }
+
+    private static boolean isPlsqlCreateUnit(String window) {
+        return window.contains("PACKAGE")
+                || window.matches("(?s).*\\bPROCEDURE\\b.*")
+                || window.matches("(?s).*\\bFUNCTION\\b.*")
+                || window.matches("(?s).*\\bTRIGGER\\b.*")
+                || window.matches("(?s).*\\bTYPE\\b.*");
+    }
+
+    private static boolean isKeywordAt(String ahead, String keyword) {
+        if (!ahead.startsWith(keyword)) {
+            return false;
+        }
+        return ahead.length() == keyword.length()
+                || !Character.isLetterOrDigit(ahead.charAt(keyword.length()));
+    }
+
+    private static int indexOfStatementEnd(String content, int from) {
+        int j = from;
+        while (j < content.length() && content.charAt(j) != ';' && content.charAt(j) != '\n') {
+            j++;
+        }
+        if (j < content.length() && content.charAt(j) == ';') {
+            return j;
+        }
+        return -1;
+    }
+
+    /**
+     * '/' terminates a CREATE unit when it sits alone (SQL*Plus), not as division operator.
+     */
+    private static boolean isSlashTerminator(String content, int index, StringBuilder current) {
+        // Only when '/' starts a fresh token after newline/whitespace in the current buffer
+        // or current buffer already holds a complete unit ending with END...;
+        int prev = index - 1;
+        while (prev >= 0 && (content.charAt(prev) == ' ' || content.charAt(prev) == '\t')) {
+            prev--;
+        }
+        if (prev >= 0 && content.charAt(prev) != '\n') {
+            return false;
+        }
+        int next = index + 1;
+        while (next < content.length() && (content.charAt(next) == ' ' || content.charAt(next) == '\t')) {
+            next++;
+        }
+        if (next < content.length() && content.charAt(next) != '\n' && content.charAt(next) != '\r') {
+            return false;
+        }
+        String soFar = current.toString().trim();
+        return !soFar.isEmpty();
     }
 
     private SqlStatementInfo analyzeSegment(int index, Segment segment) {
         String raw = segment.text;
         String upper = raw.toUpperCase(Locale.ROOT);
         List<String> objects = new ArrayList<>();
+        List<String> schemas = new ArrayList<>();
         boolean unsupported = false;
         String unsupportedReason = null;
         boolean missingWhere = false;
@@ -272,30 +330,37 @@ public final class SqlScriptParser {
         SqlOperationType op = SqlOperationType.UNKNOWN;
         if (upper.contains("PACKAGE BODY") || upper.matches("(?s).*\\bCREATE\\b.*\\bPACKAGE\\s+BODY\\b.*")) {
             op = SqlOperationType.PACKAGE_BODY;
-            addObjects(OBJECT_AFTER, raw, objects);
+            addObjects(OBJECT_AFTER, raw, objects, schemas);
         } else if (upper.matches("(?s).*\\bCREATE\\b.*\\bPACKAGE\\b.*") && !upper.contains("PACKAGE BODY")) {
             op = SqlOperationType.PACKAGE_SPEC;
-            addObjects(OBJECT_AFTER, raw, objects);
+            addObjects(OBJECT_AFTER, raw, objects, schemas);
         } else if (startsWithKeyword(upper, "DROP")) {
-            op = SqlOperationType.DROP;
-            addObjects(DROP_TARGET, raw, objects);
+            String trimmed = upper.stripLeading();
+            if (trimmed.matches("(?s)DROP\\s+PACKAGE\\s+BODY\\b.*")) {
+                op = SqlOperationType.PACKAGE_BODY;
+            } else if (trimmed.matches("(?s)DROP\\s+PACKAGE\\b.*")) {
+                op = SqlOperationType.PACKAGE_SPEC;
+            } else {
+                op = SqlOperationType.DROP;
+            }
+            addObjects(DROP_TARGET, raw, objects, schemas);
         } else if (startsWithKeyword(upper, "TRUNCATE")) {
             op = SqlOperationType.TRUNCATE;
-            addObjects(OBJECT_AFTER, raw, objects);
+            addObjects(OBJECT_AFTER, raw, objects, schemas);
         } else if (startsWithKeyword(upper, "DELETE")) {
             op = SqlOperationType.DELETE;
-            addObjects(DELETE_TARGET, raw, objects);
+            addObjects(DELETE_TARGET, raw, objects, schemas);
             missingWhere = !WHERE.matcher(raw).find();
         } else if (startsWithKeyword(upper, "UPDATE")) {
             op = SqlOperationType.UPDATE;
-            addObjects(UPDATE_TARGET, raw, objects);
+            addObjects(UPDATE_TARGET, raw, objects, schemas);
             missingWhere = !WHERE.matcher(raw).find();
         } else if (startsWithKeyword(upper, "ALTER")) {
             op = SqlOperationType.ALTER;
-            addObjects(OBJECT_AFTER, raw, objects);
+            addObjects(OBJECT_AFTER, raw, objects, schemas);
         } else if (startsWithKeyword(upper, "CREATE")) {
             op = SqlOperationType.CREATE;
-            addObjects(OBJECT_AFTER, raw, objects);
+            addObjects(OBJECT_AFTER, raw, objects, schemas);
         } else if (GRANT_REVOKE.matcher(upper).find() && startsWithKeyword(upper, "GRANT")) {
             op = SqlOperationType.GRANT;
         } else if (startsWithKeyword(upper, "REVOKE")) {
@@ -310,7 +375,7 @@ public final class SqlScriptParser {
             unsupportedReason = unsupportedReason == null ? "MERGE statements are reported as unsupported for deep analysis" : unsupportedReason;
         } else if (startsWithKeyword(upper, "INSERT")) {
             op = SqlOperationType.INSERT;
-            addObjects(OBJECT_AFTER, raw, objects);
+            addObjects(OBJECT_AFTER, raw, objects, schemas);
         } else if (startsWithKeyword(upper, "SELECT")) {
             op = SqlOperationType.SELECT;
         } else if (upper.contains("<<") || upper.contains("PRAGMA") || upper.contains("@")) {
@@ -325,10 +390,17 @@ public final class SqlScriptParser {
             op = SqlOperationType.UNSUPPORTED;
         }
 
-        // Deduplicate objects preserving order
+        // Deduplicate objects preserving order (keep first schema for each name)
         Set<String> unique = new LinkedHashSet<>();
-        for (String o : objects) {
-            unique.add(o.toUpperCase(Locale.ROOT));
+        List<String> dedupNames = new ArrayList<>();
+        List<String> dedupSchemas = new ArrayList<>();
+        for (int i = 0; i < objects.size(); i++) {
+            String name = objects.get(i).toUpperCase(Locale.ROOT);
+            if (unique.add(name)) {
+                dedupNames.add(name);
+                String schema = i < schemas.size() ? schemas.get(i) : null;
+                dedupSchemas.add(schema == null ? null : schema.toUpperCase(Locale.ROOT));
+            }
         }
 
         return new SqlStatementInfo(
@@ -336,7 +408,8 @@ public final class SqlScriptParser {
                 segment.startLine,
                 raw,
                 op,
-                List.copyOf(unique),
+                List.copyOf(dedupNames),
+                dedupSchemas,
                 missingWhere,
                 unsupported,
                 unsupportedReason,
@@ -351,12 +424,21 @@ public final class SqlScriptParser {
                 && (trimmed.length() == keyword.length() || !Character.isLetterOrDigit(trimmed.charAt(keyword.length())));
     }
 
-    private static void addObjects(Pattern pattern, String raw, List<String> objects) {
+    private static void addObjects(Pattern pattern, String raw, List<String> objects, List<String> schemas) {
         Matcher m = pattern.matcher(raw);
         while (m.find()) {
-            String name = m.group(1);
+            String schema;
+            String name;
+            if (m.groupCount() >= 2) {
+                schema = m.group(1);
+                name = m.group(2);
+            } else {
+                schema = null;
+                name = m.group(1);
+            }
             if (name != null && !name.isBlank()) {
                 objects.add(name);
+                schemas.add(schema);
             }
         }
     }

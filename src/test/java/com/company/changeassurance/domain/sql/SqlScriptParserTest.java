@@ -61,4 +61,56 @@ class SqlScriptParserTest {
         assertThat(result.detectedOperations())
                 .contains(SqlOperationType.PACKAGE_SPEC, SqlOperationType.PACKAGE_BODY);
     }
+
+    @Test
+    void capturesSchemaOnQualifiedPackage() {
+        SqlParseResult result = parser.parse(
+                """
+                CREATE OR REPLACE PACKAGE app.billing_pkg AS
+                  PROCEDURE p;
+                END billing_pkg;
+                /
+                """,
+                "q.sql"
+        );
+        assertThat(result.statements()).isNotEmpty();
+        SqlStatementInfo stmt = result.statements().get(0);
+        assertThat(stmt.operationType()).isEqualTo(SqlOperationType.PACKAGE_SPEC);
+        assertThat(stmt.objectNames()).contains("BILLING_PKG");
+        assertThat(stmt.objectSchemas()).contains("APP");
+    }
+
+    @Test
+    void keepsPackageBodyAsSingleStatementDespiteNestedEnds() {
+        String sql = """
+                CREATE OR REPLACE PACKAGE BODY APP.USERS_PKG AS
+                  PROCEDURE ASSERT_NETWORKID(p_networkid IN VARCHAR2) IS
+                  BEGIN
+                    NULL;
+                  END ASSERT_NETWORKID;
+
+                  PROCEDURE CREATE_USER(
+                    p_user_name IN VARCHAR2,
+                    p_networkid IN VARCHAR2,
+                    p_password  IN VARCHAR2
+                  ) IS
+                  BEGIN
+                    ASSERT_NETWORKID(p_networkid);
+                  END CREATE_USER;
+                END USERS_PKG;
+                /
+                """;
+        SqlParseResult result = parser.parse(sql, "users_pkg.sql");
+        assertThat(result.statements()).hasSize(1);
+        assertThat(result.statements().get(0).operationType()).isEqualTo(SqlOperationType.PACKAGE_BODY);
+        assertThat(result.statements().get(0).unsupported()).isFalse();
+        assertThat(result.statements().get(0).objectNames()).contains("USERS_PKG");
+    }
+
+    @Test
+    void classifiesDropPackageAsSpecChange() {
+        SqlParseResult result = parser.parse("DROP PACKAGE app.old_pkg;", "drop.sql");
+        assertThat(result.statements().get(0).operationType()).isEqualTo(SqlOperationType.PACKAGE_SPEC);
+        assertThat(result.statements().get(0).objectNames()).contains("OLD_PKG");
+    }
 }

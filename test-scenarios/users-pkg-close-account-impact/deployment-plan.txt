@@ -1,0 +1,4 @@
+Compile APP.USERS_PKG body in UAT after hours.
+Owner: APP PL/SQL team.
+Smoke-test one CLOSE_USER_ACCOUNT call for a non-prod network id.
+No downtime expected (body-only replace).

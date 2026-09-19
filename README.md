@@ -13,7 +13,7 @@ An intelligent release-review agent that autonomously plans and performs a first
 | Backend | Java **17**, Spring Boot **3.5**, WAR |
 | Enterprise deploy | WebLogic **15.1.1+** (Jakarta EE) |
 | Frontend | Angular **19** standalone + Material |
-| AI | ChatGPT via `ModelGateway` (`spring-ai`/`openai` + `OPENAI_API_KEY`); also `fake` / `disabled` |
+| AI | ChatGPT or local OpenAI-compatible (Ollama/LM Studio) via `ModelGateway`; modes: `spring-ai`/`openai`, `ollama`/`local`, `fake`, `disabled` |
 | Persistence | In-memory adapter (MVP) + H2 on classpath |
 
 ## Backend
@@ -28,11 +28,20 @@ mvn spring-boot:run
 
 Without `OPENAI_API_KEY`, the app still starts and falls back to deterministic checks (AI sections unavailable).
 
+**Local AI (Ollama + Qwen3):**
+
+```bash
+ollama pull qwen3:14b
+export CHANGEASSURANCE_AI_MODE=ollama
+mvn spring-boot:run
+```
+
+See [`.env.example`](.env.example) and [`docs/ai-prompts.md`](docs/ai-prompts.md) for ChatGPT, Ollama, and LM Studio configuration.
+
 - Health: http://localhost:8080/actuator/health
 - Swagger UI: http://localhost:8080/swagger-ui.html
 - API: http://localhost:8080/api/v1/change-reviews
-
-See [`.env.example`](.env.example) for ChatGPT configuration.
+- Package impact (fake catalog): submit `packageName=BILLING_PKG`; HTML report at `/api/v1/change-reviews/{id}/report.html`
 
 Executable WAR:
 

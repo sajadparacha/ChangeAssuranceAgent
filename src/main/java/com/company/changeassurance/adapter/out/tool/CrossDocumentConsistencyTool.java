@@ -62,7 +62,7 @@ public class CrossDocumentConsistencyTool implements AssuranceTool {
 
         for (AffectedObject obj : ctx.affectedObjects()) {
             String name = obj.objectName().toLowerCase(Locale.ROOT);
-            if (!deploy.contains(name)) {
+            if (!deploy.isBlank() && !deploy.contains(name)) {
                 add(findings, evidence, "CON-004", "Deployment and SQL object mismatch", FindingSeverity.HIGH,
                         FindingCategory.CONSISTENCY,
                         "Deployment plan omits SQL-modified object " + obj.objectName() + ".",

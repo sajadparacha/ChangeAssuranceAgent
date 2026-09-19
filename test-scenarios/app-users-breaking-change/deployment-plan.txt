@@ -1,0 +1,3 @@
+Run the attached script against APP in UAT.
+Owner: on-call DBA.
+Verify row counts afterward.

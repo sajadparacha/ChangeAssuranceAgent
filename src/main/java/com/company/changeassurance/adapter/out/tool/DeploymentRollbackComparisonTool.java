@@ -48,15 +48,20 @@ public class DeploymentRollbackComparisonTool implements AssuranceTool {
         String app = nullToEmpty(ctx.review().getApplicationName()).toLowerCase(Locale.ROOT);
         String env = nullToEmpty(ctx.review().getTargetEnvironment()).toLowerCase(Locale.ROOT);
 
+        if (deploy.isBlank() && rollback.isBlank()) {
+            return ToolExecutionResult.success(List.of(), List.of(),
+                    "Deployment/rollback plans were not provided; comparison skipped.");
+        }
+
         for (AffectedObject obj : ctx.affectedObjects()) {
             String name = obj.objectName().toLowerCase(Locale.ROOT);
-            if (!deploy.contains(name)) {
+            if (!deploy.isBlank() && !deploy.contains(name)) {
                 add(findings, evidence, "RBK-004", "Changed object absent from deployment plan",
                         FindingSeverity.HIGH, FindingCategory.DEPLOYMENT,
                         "Object " + obj.objectName() + " is modified in SQL but not mentioned in the deployment plan.",
                         "Include " + obj.objectName() + " in deployment instructions.");
             }
-            if (!rollback.contains(name)) {
+            if (!rollback.isBlank() && !rollback.contains(name)) {
                 add(findings, evidence, "RBK-001", "Changed object absent from rollback plan",
                         FindingSeverity.CRITICAL, FindingCategory.ROLLBACK,
                         "Object " + obj.objectName() + " lacks rollback coverage.",

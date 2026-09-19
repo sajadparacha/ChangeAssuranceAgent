@@ -21,7 +21,7 @@ spring:
     multipart:
       max-file-size: 1MB
       max-request-size: 2MB
-  # ChatGPT is wired manually in ChangeAssuranceConfiguration; disable Spring AI auto-chat.
+  # OpenAI-compatible gateway is wired manually in ChangeAssuranceConfiguration; disable Spring AI auto-chat.
   ai:
     model:
       chat: none
@@ -54,13 +54,38 @@ springdoc:
 changeassurance:
   ai:
     # spring-ai | openai | chatgpt → ChatGPT via OPENAI_API_KEY
+    # ollama | local → OpenAI-compatible local server (default: Ollama + qwen3:14b)
     # fake → stub responses; disabled → AI off (deterministic fallback)
+    # Override with env CHANGEASSURANCE_AI_MODE or property changeassurance.ai.mode
     mode: ${CHANGEASSURANCE_AI_MODE:spring-ai}
     spring-ai-enabled: ${CHANGEASSURANCE_AI_SPRING_AI_ENABLED:true}
-    model: ${CHANGEASSURANCE_AI_MODEL:gpt-4o-mini}
+    # Blank → gpt-4o-mini (cloud) or qwen3:14b (ollama/local)
+    model: ${CHANGEASSURANCE_AI_MODEL:}
+    # Blank → OpenAI default host, or http://localhost:11434/v1 for ollama/local
+    base-url: ${CHANGEASSURANCE_AI_BASE_URL:}
+    # Optional comma-separated allowlist. Blank = any valid model id (custom allowed in UI)
+    allowed-models: ${CHANGEASSURANCE_AI_ALLOWED_MODELS:}
+    # Offer Ollama as a selectable provider alongside cloud (when mode is OpenAI-compatible)
+    ollama-enabled: ${CHANGEASSURANCE_AI_OLLAMA_ENABLED:true}
+    ollama-base-url: ${CHANGEASSURANCE_AI_OLLAMA_BASE_URL:http://localhost:11434/v1}
   storage:
     root: ./uploads
     max-bytes: 1048576
+  db-metadata:
+    # oracle → live ALL_* dictionary via JDBC (default for local/dev with Docker Oracle)
+    # fake → in-memory demo catalog (tests / offline only; set CHANGEASSURANCE_DB_METADATA_MODE=fake)
+    mode: ${CHANGEASSURANCE_DB_METADATA_MODE:oracle}
+    jdbc-url: ${CHANGEASSURANCE_DB_JDBC_URL:jdbc:oracle:thin:@//localhost:1521/FREEPDB1}
+    username: ${CHANGEASSURANCE_DB_USERNAME:APP}
+    password: ${CHANGEASSURANCE_DB_PASSWORD:AppDemoPass1}
+    driver-class-name: ${CHANGEASSURANCE_DB_DRIVER:oracle.jdbc.OracleDriver}
+    default-owner: ${CHANGEASSURANCE_DB_DEFAULT_OWNER:APP}
+  investigation:
+    max-follow-up-rounds: ${CHANGEASSURANCE_INVESTIGATION_MAX_FOLLOW_UPS:2}
+    large-dependent-threshold: ${CHANGEASSURANCE_INVESTIGATION_LARGE_DEPENDENTS:4}
+    transitive-max-depth: ${CHANGEASSURANCE_INVESTIGATION_TRANSITIVE_DEPTH:3}
+    transitive-max-nodes: ${CHANGEASSURANCE_INVESTIGATION_TRANSITIVE_NODES:50}
+    source-search-max-rows: ${CHANGEASSURANCE_INVESTIGATION_SOURCE_MAX_ROWS:100}
 
 logging:
   level:

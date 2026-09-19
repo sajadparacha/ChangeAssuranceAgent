@@ -73,7 +73,10 @@ public class SqlSafetyTool implements AssuranceTool {
             if (stmt.operationType() == SqlOperationType.PACKAGE_SPEC) {
                 add(findings, eid, "SQL-008", "Package specification changed", FindingSeverity.HIGH, stmt);
             }
-            if (stmt.unsupported()) {
+            if (stmt.operationType() == SqlOperationType.PACKAGE_BODY) {
+                add(findings, eid, "SQL-011", "Package body changed", FindingSeverity.MEDIUM, stmt);
+            }
+            if (stmt.unsupported() && shouldRaiseUnsupportedFinding(stmt)) {
                 add(findings, eid, "SQL-009", "Unsupported SQL construct", FindingSeverity.HIGH, stmt);
             }
         }
@@ -111,6 +114,18 @@ public class SqlSafetyTool implements AssuranceTool {
                 "SQL safety analysis identified " + findings.size()
                         + " finding(s) across " + parsed.affectedObjectNames().size() + " object(s)."
         );
+    }
+
+    /**
+     * Report only actionable unsupported constructs (dynamic SQL / MERGE / ambiguous markers).
+     * Generic "unrecognized" fragments from PL/SQL package internals confuse reviewers and are omitted.
+     */
+    private static boolean shouldRaiseUnsupportedFinding(SqlStatementInfo stmt) {
+        String reason = stmt.unsupportedReason() == null ? "" : stmt.unsupportedReason();
+        if (reason.contains("Dynamic SQL") || reason.contains("MERGE") || reason.contains("Ambiguous")) {
+            return true;
+        }
+        return false;
     }
 
     private EvidenceId evidenceFor(List<Evidence> evidence, SqlStatementInfo stmt) {

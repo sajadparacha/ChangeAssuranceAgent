@@ -4,6 +4,7 @@ import { Observable } from 'rxjs';
 import { API_BASE_URL } from '../../../core/configuration/api.config';
 import { ChangeReviewRepository } from './change-review.repository';
 import {
+  AiConfig,
   ChangeAssuranceReport,
   ChangeReview,
   ChangeReviewSummary,
@@ -19,6 +20,10 @@ import {
 export class ChangeReviewHttpRepository extends ChangeReviewRepository {
   private readonly http = inject(HttpClient);
   private readonly base = API_BASE_URL;
+
+  getAiConfig(): Observable<AiConfig> {
+    return this.http.get<AiConfig>(`${this.base}/ai/config`);
+  }
 
   submitReview(request: SubmitChangeReviewRequest): Observable<SubmitChangeReviewResponse> {
     const form = new FormData();

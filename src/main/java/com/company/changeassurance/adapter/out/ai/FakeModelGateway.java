@@ -41,6 +41,11 @@ public final class FakeModelGateway implements ModelGateway {
     }
 
     @Override
+    public String defaultModel() {
+        return "fake";
+    }
+
+    @Override
     @SuppressWarnings("unchecked")
     public <T> T execute(AiTaskType taskType, AiRequest request, Class<T> responseType) {
         Objects.requireNonNull(taskType, "taskType must not be null");

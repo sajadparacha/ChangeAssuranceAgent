@@ -11,7 +11,10 @@ import com.company.changeassurance.adapter.out.ai.DisabledModelGateway;
 import com.company.changeassurance.application.port.out.ModelGateway;
 
 @SpringBootTest
-@TestPropertySource(properties = "changeassurance.ai.mode=disabled")
+@TestPropertySource(properties = {
+        "changeassurance.ai.mode=disabled",
+        "changeassurance.db-metadata.mode=fake"
+})
 class DisabledModelGatewayConfigurationTest {
 
     @Autowired

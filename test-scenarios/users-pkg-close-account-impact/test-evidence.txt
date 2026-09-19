@@ -1,0 +1,3 @@
+Compiled package body in a local scratch schema.
+Called CLOSE_USER_ACCOUNT once for a test user with no linked orders.
+Did not re-test ORDERS_PKG, BILLING_PKG, CLOSE_USER_ACCOUNT_JOB, or reporting views.

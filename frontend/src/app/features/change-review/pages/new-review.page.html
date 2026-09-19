@@ -1,7 +1,10 @@
 <section class="page">
   <header>
     <h1>AI Change Assurance Agent</h1>
-    <p>Submit a production change package for first-pass autonomous review.</p>
+    <p>
+      Review a proposed database change from a SQL script and evidence package,
+      or analyze Oracle PL/SQL package impact from the catalog.
+    </p>
     <a routerLink="/reviews">Review history</a>
   </header>
 
@@ -10,24 +13,159 @@
   }
 
   <form [formGroup]="form" (ngSubmit)="submit()" class="form-grid">
-    <mat-form-field appearance="outline"><mat-label>Application name</mat-label><input matInput formControlName="applicationName" /></mat-form-field>
-    <mat-form-field appearance="outline"><mat-label>Change title</mat-label><input matInput formControlName="changeTitle" /></mat-form-field>
-    <mat-form-field appearance="outline" class="full"><mat-label>Change description</mat-label><textarea matInput rows="3" formControlName="changeDescription"></textarea></mat-form-field>
-    <mat-form-field appearance="outline"><mat-label>Change type</mat-label>
-      <mat-select formControlName="changeType">
-        <mat-option value="UNKNOWN">UNKNOWN</mat-option>
-        <mat-option value="PLSQL">PLSQL</mat-option>
-        <mat-option value="DATABASE_SCHEMA">DATABASE_SCHEMA</mat-option>
-        <mat-option value="DATA_CHANGE">DATA_CHANGE</mat-option>
-        <mat-option value="MIXED">MIXED</mat-option>
-      </mat-select>
-    </mat-form-field>
-    <mat-form-field appearance="outline"><mat-label>Target environment</mat-label><input matInput formControlName="targetEnvironment" /></mat-form-field>
-    <mat-form-field appearance="outline" class="full"><mat-label>Implementation window</mat-label><input matInput formControlName="implementationWindow" /></mat-form-field>
-    <mat-form-field appearance="outline" class="full"><mat-label>Deployment plan</mat-label><textarea matInput rows="4" formControlName="deploymentPlan"></textarea></mat-form-field>
-    <mat-form-field appearance="outline" class="full"><mat-label>Rollback plan</mat-label><textarea matInput rows="4" formControlName="rollbackPlan"></textarea></mat-form-field>
-    <mat-form-field appearance="outline" class="full"><mat-label>Test evidence</mat-label><textarea matInput rows="4" formControlName="testEvidence"></textarea></mat-form-field>
-    <label class="full file">SQL / PL/SQL file <input type="file" accept=".sql,.pkb,.pks,.pls,.ddl,.txt" (change)="onFileSelected($event)" /></label>
-    <button mat-flat-button color="primary" type="submit" [disabled]="facade.loading()">Submit for review</button>
+    <fieldset class="full mode-fieldset">
+      <legend>Review type</legend>
+      <label class="mode-option">
+        <input type="radio" name="reviewMode" [checked]="reviewMode() === 'changePackage'" (change)="setReviewMode('changePackage')" />
+        <span>
+          <strong>Change package / SQL</strong>
+          <small>Best for table DDL/DML and full release evidence (your breaking-change tests)</small>
+        </span>
+      </label>
+      <label class="mode-option">
+        <input type="radio" name="reviewMode" [checked]="reviewMode() === 'packageImpact'" (change)="setReviewMode('packageImpact')" />
+        <span>
+          <strong>Package catalog impact</strong>
+          <small>Oracle package dependents, jobs, and health from read-only catalog metadata</small>
+        </span>
+      </label>
+    </fieldset>
+
+    @if (reviewMode() === 'packageImpact') {
+      <mat-form-field appearance="outline">
+        <mat-label>Package name</mat-label>
+        <input matInput formControlName="packageName" placeholder="e.g. BILLING_PKG" />
+      </mat-form-field>
+      <mat-form-field appearance="outline">
+        <mat-label>Schema owner (optional)</mat-label>
+        <input matInput formControlName="schemaOwner" placeholder="e.g. APP" />
+      </mat-form-field>
+    }
+
+    @if (reviewMode() === 'changePackage') {
+      <mat-form-field appearance="outline">
+        <mat-label>Application name</mat-label>
+        <input matInput formControlName="applicationName" placeholder="e.g. APP" />
+      </mat-form-field>
+      <mat-form-field appearance="outline">
+        <mat-label>Change title</mat-label>
+        <input matInput formControlName="changeTitle" placeholder="e.g. Minor USERS table cleanup" />
+      </mat-form-field>
+      <mat-form-field appearance="outline" class="full">
+        <mat-label>Change description</mat-label>
+        <textarea matInput rows="3" formControlName="changeDescription"
+          placeholder="What is changing and why?"></textarea>
+      </mat-form-field>
+
+      <label class="full file">
+        <span class="file-label">SQL / PL/SQL change script <span class="required">required for this mode</span></span>
+        <input type="file" accept=".sql,.pkb,.pks,.pls,.ddl,.txt" (change)="onFileSelected($event)" />
+        @if (selectedFile) {
+          <span class="file-name">Selected: {{ selectedFile.name }}</span>
+        }
+      </label>
+
+      <div class="full optional-package">
+        <button mat-button type="button" (click)="toggleOptionalPackage()">
+          {{ showOptionalPackage() ? 'Hide' : 'Also analyze' }} package catalog impact (optional)
+        </button>
+        @if (showOptionalPackage()) {
+          <div class="optional-package-fields">
+            <mat-form-field appearance="outline">
+              <mat-label>Package name</mat-label>
+              <input matInput formControlName="packageName" placeholder="e.g. BILLING_PKG" />
+            </mat-form-field>
+            <mat-form-field appearance="outline">
+              <mat-label>Schema owner (optional)</mat-label>
+              <input matInput formControlName="schemaOwner" placeholder="e.g. APP" />
+            </mat-form-field>
+          </div>
+        }
+      </div>
+    }
+
+    @if (facade.aiConfig(); as ai) {
+      @if (ai.providers.length > 0) {
+      <mat-form-field appearance="outline" class="full">
+        <mat-label>AI provider</mat-label>
+        <mat-select formControlName="aiProvider">
+          @for (provider of ai.providers; track provider.id) {
+            <mat-option [value]="provider.id" [disabled]="!provider.available && provider.models.length === 0">
+              {{ provider.label }}@if (!provider.available && provider.models.length === 0) { (unavailable)}
+            </mat-option>
+          }
+        </mat-select>
+        <mat-hint>
+          @if (selectedProvider(); as provider) {
+            @if (provider.available || provider.models.length > 0) {
+              {{ provider.label }}@if (provider.baseUrl) { · {{ provider.baseUrl }}}
+            } @else {
+              Provider unavailable — pick another or continue with deterministic checks
+            }
+          }
+        </mat-hint>
+      </mat-form-field>
+
+      @if (selectedProvider(); as provider) {
+        @if (provider.models.length > 0 || provider.allowsCustomModel) {
+        <mat-form-field appearance="outline" class="full">
+          <mat-label>AI model</mat-label>
+          <mat-select formControlName="aiModel">
+            @for (model of provider.models; track model.id) {
+              <mat-option [value]="model.id">
+                {{ model.label }}@if (model.isDefault) { (default)}
+              </mat-option>
+            }
+            @if (provider.allowsCustomModel) {
+              <mat-option value="__custom__">Custom model…</mat-option>
+            }
+          </mat-select>
+          <mat-hint>
+            Used for AI-assisted classification and analysis on this review
+          </mat-hint>
+        </mat-form-field>
+        @if (provider.allowsCustomModel && form.controls.aiModel.value === '__custom__') {
+          <mat-form-field appearance="outline" class="full">
+            <mat-label>Custom model id</mat-label>
+            <input matInput formControlName="customAiModel" placeholder="e.g. llama3.2:latest" />
+          </mat-form-field>
+        }
+        }
+      }
+      } @else if (ai.models.length > 0 || ai.allowsCustomModel) {
+      <mat-form-field appearance="outline" class="full">
+        <mat-label>AI model</mat-label>
+        <mat-select formControlName="aiModel">
+          @for (model of ai.models; track model.id) {
+            <mat-option [value]="model.id">
+              {{ model.label }}@if (model.isDefault) { (default)}
+            </mat-option>
+          }
+          @if (ai.allowsCustomModel) {
+            <mat-option value="__custom__">Custom model…</mat-option>
+          }
+        </mat-select>
+        <mat-hint>
+          @if (ai.available) {
+            Mode: {{ ai.mode }}@if (ai.baseUrl) { · {{ ai.baseUrl }}}
+          } @else {
+            AI unavailable — review still runs with deterministic checks
+          }
+        </mat-hint>
+      </mat-form-field>
+      }
+    }
+
+    @if (formError(); as msg) {
+      <p class="error full" role="alert">{{ msg }}</p>
+    }
+
+    <button mat-flat-button color="primary" type="submit" class="full submit-btn" [disabled]="facade.loading()">
+      @if (reviewMode() === 'packageImpact') {
+        Analyze package impact
+      } @else {
+        Run change assurance review
+      }
+    </button>
   </form>
 </section>

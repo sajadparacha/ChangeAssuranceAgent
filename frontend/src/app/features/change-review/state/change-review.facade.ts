@@ -3,6 +3,7 @@ import { Router } from '@angular/router';
 import { Subscription, interval, switchMap, takeWhile } from 'rxjs';
 import { ChangeReviewHttpRepository } from '../data-access/change-review-http.repository';
 import {
+  AiConfig,
   ChangeAssuranceReport,
   ChangeReview,
   ChangeReviewSummary,
@@ -21,6 +22,7 @@ export class ChangeReviewFacade {
 
   readonly loading = signal(false);
   readonly error = signal<string | null>(null);
+  readonly aiConfig = signal<AiConfig | null>(null);
   readonly activeReview = signal<ChangeReview | null>(null);
   readonly plan = signal<ReviewPlan | null>(null);
   readonly activities = signal<ToolActivity[]>([]);
@@ -34,6 +36,16 @@ export class ChangeReviewFacade {
   readonly isCompleted = computed(
     () => this.activeReview()?.status === 'COMPLETED' || this.activeReview()?.currentStage === 'COMPLETED'
   );
+
+  loadAiConfig(onLoaded?: (config: AiConfig) => void): void {
+    this.repository.getAiConfig().subscribe({
+      next: (config) => {
+        this.aiConfig.set(config);
+        onLoaded?.(config);
+      },
+      error: () => this.aiConfig.set(null)
+    });
+  }
 
   submit(request: SubmitChangeReviewRequest): void {
     this.loading.set(true);

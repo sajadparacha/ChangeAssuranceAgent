@@ -86,10 +86,20 @@ Spring Boot **3.5.x** was chosen over Boot 4.x for Java 17 + WebLogic 15 alignme
 ModelGateway (port)
 ├── FakeModelGateway      # tests / local stubs
 ├── DisabledModelGateway  # AI off; AiUnavailableException
-└── SpringAiModelGateway  # ChatGPT (OpenAI) via Spring AI + OPENAI_API_KEY
+└── SpringAiModelGateway  # OpenAI-compatible: ChatGPT, Ollama, LM Studio
 ```
 
 When AI is unavailable, the workflow still runs deterministic checks and marks AI report sections `UNAVAILABLE`.
+
+## Package impact analysis (Oracle facts layer)
+
+```text
+DatabaseMetadataPort
+├── FakeDatabaseMetadataAdapter   # demo catalog
+└── OracleJdbcMetadataAdapter     # read-only ALL_* dictionary SELECTs
+```
+
+Discrete approved tools gather object info, direct/transitive dependents, dependencies, source references, scheduler jobs, and related object health. `InvestigationLoopService` may append up to two follow-up tool rounds. `PackageImpactAssessmentCalculator` sets deterministic overall impact (`LOW|MEDIUM|HIGH`) and regression test scope; AI may explain but must not override the level.
 
 ## Security posture (foundation)
 

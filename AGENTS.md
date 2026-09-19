@@ -64,6 +64,11 @@ Property: `changeassurance.ai.mode`
 | `fake` | `FakeModelGateway` — stub responses for tests/local |
 | `disabled` | `DisabledModelGateway` — throws `AiUnavailableException`; review must still be able to complete deterministically |
 | `spring-ai` / `openai` / `chatgpt` | `SpringAiModelGateway` — ChatGPT via `OPENAI_API_KEY` (fails closed if key missing) |
+| `ollama` / `local` | `SpringAiModelGateway` — OpenAI-compatible local server (default Ollama + `qwen3:14b` at `http://localhost:11434/v1`); clients select provider+model via `GET /api/v1/ai/config` and optional `aiProvider`/`aiModel` on submit |
+
+When mode is `spring-ai`/`openai`/`chatgpt`, Ollama is also offered as a selectable provider (default on) via `changeassurance.ai.ollama-enabled` / `CHANGEASSURANCE_AI_OLLAMA_ENABLED`, discovering models from `changeassurance.ai.ollama-base-url`.
+
+Package DB impact: submit with `packageName` (optional `schemaOwner`), or upload Oracle package DDL/SQL and the agent derives the package target. Catalog metadata is queried via discrete read-only tools (`GET_PACKAGE_OBJECT_INFO`, dependents/dependencies, scheduler, health; follow-ups may add transitive + source search). Spec vs body changes in the deploy script raise deterministic impact (spec = API contract risk). Catalog modes: `oracle` (default — live JDBC dictionary tools) or optional `fake` demo catalog for offline/tests. Application source repos are not scanned. Deterministic overall impact + regression test scope cannot be overridden by AI. HTML report: `GET /api/v1/change-reviews/{id}/report.html`.
 
 ## Adding a rule (later)
 

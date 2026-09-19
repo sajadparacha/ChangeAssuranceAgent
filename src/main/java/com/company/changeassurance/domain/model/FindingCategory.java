@@ -9,5 +9,6 @@ public enum FindingCategory {
     SECURITY,
     CONSISTENCY,
     SCOPE,
+    DEPENDENCY_IMPACT,
     AI_OBSERVATION
 }

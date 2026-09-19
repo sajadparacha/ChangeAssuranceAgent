@@ -1,0 +1,2 @@
+Small body-only tweak to APP.USERS_PKG.CLOSE_USER_ACCOUNT for clearer audit messages.
+No API / specification change. Low risk; existing callers are unaffected.

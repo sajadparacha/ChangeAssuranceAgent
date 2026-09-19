@@ -25,6 +25,25 @@ public class EvidenceCatalogService {
 
     public void seedInitialEvidence(ChangeReview review, FileStoragePort.StoredFile storedFile) {
         Instant now = clockPort.now();
+        if (review.getPackageName() != null && !review.getPackageName().isBlank()) {
+            String target = review.getSchemaOwner() == null
+                    ? review.getPackageName()
+                    : review.getSchemaOwner() + "." + review.getPackageName();
+            boolean inferred = review.getPackageDeployDelta().inferredFromScript();
+            review.addEvidence(new Evidence(
+                    new EvidenceId(idGenerator.nextEvidenceId()),
+                    EvidenceType.PACKAGE_TARGET,
+                    EvidenceSource.SUBMITTED_PACKAGE,
+                    "packageName",
+                    inferred
+                            ? "PL/SQL package derived from deploy SQL for database impact analysis"
+                            : "Requested PL/SQL package for database impact analysis",
+                    target,
+                    null,
+                    null,
+                    now
+            ));
+        }
         add(review, EvidenceType.CHANGE_DESCRIPTION, EvidenceSource.SUBMITTED_PACKAGE,
                 "changeDescription", "Submitted change description", review.getChangeDescription(), now);
         add(review, EvidenceType.DEPLOYMENT_PLAN, EvidenceSource.SUBMITTED_PACKAGE,

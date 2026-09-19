@@ -2,11 +2,9 @@ package com.company.changeassurance.application.workflow;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,17 +19,22 @@ import com.company.changeassurance.application.port.out.ClockPort;
 import com.company.changeassurance.application.port.out.FileStoragePort;
 import com.company.changeassurance.application.port.out.ModelGateway;
 import com.company.changeassurance.application.port.out.SqlAnalysisPort;
+import com.company.changeassurance.application.service.AiConfigService;
 import com.company.changeassurance.application.service.AiReasoningService;
 import com.company.changeassurance.application.service.EvidenceCatalogService;
 import com.company.changeassurance.application.service.IdGenerator;
+import com.company.changeassurance.application.service.InvestigationLoopService;
 import com.company.changeassurance.application.service.ReportAssembler;
 import com.company.changeassurance.application.service.ToolRegistry;
+import com.company.changeassurance.configuration.ChangeAssuranceProperties;
+import com.company.changeassurance.domain.db.PackageImpactAssessment;
 import com.company.changeassurance.domain.exception.AiUnavailableException;
 import com.company.changeassurance.domain.exception.DomainValidationException;
 import com.company.changeassurance.domain.model.ActivityId;
 import com.company.changeassurance.domain.model.ActorType;
 import com.company.changeassurance.domain.model.AffectedObject;
 import com.company.changeassurance.domain.model.AiAssessment;
+import com.company.changeassurance.domain.model.AiContributionEntry;
 import com.company.changeassurance.domain.model.ChangeClassification;
 import com.company.changeassurance.domain.model.ChangeReview;
 import com.company.changeassurance.domain.model.ChangeType;
@@ -58,11 +61,14 @@ import com.company.changeassurance.domain.model.ToolActivityStatus;
 import com.company.changeassurance.domain.model.ToolType;
 import com.company.changeassurance.domain.policy.DefaultRecommendationPolicy;
 import com.company.changeassurance.domain.policy.DeterministicRiskCalculator;
+import com.company.changeassurance.domain.policy.PackageImpactAssessmentCalculator;
 import com.company.changeassurance.domain.policy.RiskScoringConfig;
 import com.company.changeassurance.domain.rule.AssuranceTool;
 import com.company.changeassurance.domain.rule.ChangeReviewRule.ChangeReviewContext;
 import com.company.changeassurance.domain.rule.ToolExecutionRequest;
 import com.company.changeassurance.domain.rule.ToolExecutionResult;
+import com.company.changeassurance.domain.sql.OraclePackageScriptAnalyzer;
+import com.company.changeassurance.domain.sql.PackageDeployDelta;
 import com.company.changeassurance.domain.sql.SqlOperationType;
 import com.company.changeassurance.domain.sql.SqlParseResult;
 import com.company.changeassurance.domain.sql.SqlStatementInfo;
@@ -78,10 +84,11 @@ public class ChangeAssuranceWorkflowService implements
     private static final List<ToolType> DEFAULT_TOOLS = List.of(
             ToolType.CHECK_CHANGE_PACKAGE_COMPLETENESS,
             ToolType.ANALYZE_SQL_SCRIPT,
-            ToolType.COMPARE_DEPLOYMENT_AND_ROLLBACK,
-            ToolType.ANALYZE_TEST_EVIDENCE_COVERAGE,
             ToolType.CHECK_CROSS_DOCUMENT_CONSISTENCY
     );
+
+    private static final List<ToolType> PACKAGE_IMPACT_TOOLS =
+            AiReasoningService.defaultPackageImpactTools();
 
     private final ChangeReviewRepository reviewRepository;
     private final ActivityLogRepository activityLogRepository;
@@ -93,9 +100,12 @@ public class ChangeAssuranceWorkflowService implements
     private final IdGenerator idGenerator;
     private final EvidenceCatalogService evidenceCatalogService;
     private final AiReasoningService aiReasoningService;
+    private final AiConfigService aiConfigService;
     private final ReportAssembler reportAssembler;
+    private final InvestigationLoopService investigationLoopService;
     private final DeterministicRiskCalculator riskCalculator;
     private final DefaultRecommendationPolicy recommendationPolicy;
+    private final PackageImpactAssessmentCalculator impactAssessmentCalculator;
 
     public ChangeAssuranceWorkflowService(
             ChangeReviewRepository reviewRepository,
@@ -108,7 +118,10 @@ public class ChangeAssuranceWorkflowService implements
             IdGenerator idGenerator,
             EvidenceCatalogService evidenceCatalogService,
             AiReasoningService aiReasoningService,
-            ReportAssembler reportAssembler
+            AiConfigService aiConfigService,
+            ReportAssembler reportAssembler,
+            InvestigationLoopService investigationLoopService,
+            ChangeAssuranceProperties properties
     ) {
         this.reviewRepository = reviewRepository;
         this.activityLogRepository = activityLogRepository;
@@ -120,9 +133,13 @@ public class ChangeAssuranceWorkflowService implements
         this.idGenerator = idGenerator;
         this.evidenceCatalogService = evidenceCatalogService;
         this.aiReasoningService = aiReasoningService;
+        this.aiConfigService = aiConfigService;
         this.reportAssembler = reportAssembler;
+        this.investigationLoopService = investigationLoopService;
         this.riskCalculator = new DeterministicRiskCalculator(RiskScoringConfig.defaults());
         this.recommendationPolicy = new DefaultRecommendationPolicy(RiskScoringConfig.defaults());
+        this.impactAssessmentCalculator = new PackageImpactAssessmentCalculator(
+                properties.investigation().largeDependentThreshold());
     }
 
     @Override
@@ -131,19 +148,16 @@ public class ChangeAssuranceWorkflowService implements
         Instant now = clockPort.now();
         ReviewId reviewId = new ReviewId(idGenerator.nextReviewId());
 
-        ChangeType submittedType = parseChangeType(command.changeType());
-        ChangeReview review = new ChangeReview(
-                reviewId,
-                command.applicationName().trim(),
-                command.changeTitle().trim(),
-                command.changeDescription(),
-                command.targetEnvironment(),
-                command.implementationWindow(),
-                submittedType,
-                now
-        );
-
-        transition(review, ReviewStage.VALIDATING_INPUT, "Validating submitted change package", ActorType.SYSTEM);
+        String packageName = blankToNull(command.packageName());
+        String schemaOwner = blankToNull(command.schemaOwner());
+        String applicationName = blankToNull(command.applicationName());
+        String changeTitle = blankToNull(command.changeTitle());
+        if (packageName != null) {
+            packageName = packageName.trim().toUpperCase(Locale.ROOT);
+            if (schemaOwner != null) {
+                schemaOwner = schemaOwner.trim().toUpperCase(Locale.ROOT);
+            }
+        }
 
         FileStoragePort.StoredFile stored = null;
         String sqlContent = null;
@@ -157,6 +171,63 @@ public class ChangeAssuranceWorkflowService implements
             sqlContent = new String(command.sqlFileContent(), java.nio.charset.StandardCharsets.UTF_8);
         }
 
+        SqlParseResult parseResult = sqlAnalysisPort.parseDetailed(
+                sqlContent == null ? "" : sqlContent,
+                command.sqlOriginalFilename()
+        );
+        PackageDeployDelta scriptDelta = OraclePackageScriptAnalyzer.analyze(parseResult);
+
+        boolean packageInferredFromScript = false;
+        if (packageName == null && scriptDelta.primaryPackageName() != null) {
+            packageName = scriptDelta.primaryPackageName();
+            packageInferredFromScript = true;
+            if (schemaOwner == null) {
+                schemaOwner = scriptDelta.primarySchemaOwner();
+            }
+        }
+
+        if (packageName == null
+                && (applicationName == null || changeTitle == null)
+                && sqlContent != null) {
+            throw new DomainValidationException(
+                    "Could not derive packageName from SQL; provide packageName or both applicationName and changeTitle");
+        }
+
+        if (packageName != null) {
+            if (applicationName == null) {
+                applicationName = schemaOwner == null ? "database" : schemaOwner;
+            }
+            if (changeTitle == null) {
+                changeTitle = packageInferredFromScript
+                        ? "DB impact from script: " + packageName
+                        : "DB impact: " + packageName;
+            }
+        }
+
+        ChangeType submittedType = parseChangeType(command.changeType());
+        if (packageName != null && submittedType == ChangeType.UNKNOWN
+                && !notBlank(command.changeType())) {
+            submittedType = ChangeType.PLSQL;
+        }
+
+        ChangeReview review = new ChangeReview(
+                reviewId,
+                applicationName,
+                changeTitle,
+                command.changeDescription(),
+                command.targetEnvironment(),
+                command.implementationWindow(),
+                submittedType,
+                now
+        );
+        review.setPackageTarget(packageName, schemaOwner);
+        review.setPackageDeployDelta(scriptDelta.focusedOn(packageName));
+        var aiSelection = aiConfigService.resolveSelection(command.aiProvider(), command.aiModel());
+        review.setPreferredAiProvider(aiSelection.provider());
+        review.setPreferredAiModel(aiSelection.model());
+
+        transition(review, ReviewStage.VALIDATING_INPUT, "Validating submitted change package", ActorType.SYSTEM);
+
         review.setPackageDocuments(
                 command.deploymentPlan(),
                 command.rollbackPlan(),
@@ -168,11 +239,6 @@ public class ChangeAssuranceWorkflowService implements
 
         transition(review, ReviewStage.CREATING_EVIDENCE, "Creating initial evidence catalog", ActorType.SYSTEM);
         evidenceCatalogService.seedInitialEvidence(review, stored);
-
-        SqlParseResult parseResult = sqlAnalysisPort.parseDetailed(
-                sqlContent == null ? "" : sqlContent,
-                command.sqlOriginalFilename()
-        );
         populateAffectedObjects(review, parseResult);
 
         runClassificationAndPlanning(review, parseResult);
@@ -299,17 +365,43 @@ public class ChangeAssuranceWorkflowService implements
         transition(review, ReviewStage.EXECUTING_TOOLS, "Executing deterministic assurance tools", ActorType.SYSTEM);
         ChangeReviewContext context = buildContext(review, parseResult);
         List<ToolType> tools = review.getReviewPlan() == null
-                ? DEFAULT_TOOLS
+                ? (isPackageImpactOnly(review) ? PACKAGE_IMPACT_TOOLS : DEFAULT_TOOLS)
                 : review.getReviewPlan().requiredTools();
 
+        java.util.LinkedHashSet<ToolType> alreadyRun = new java.util.LinkedHashSet<>();
         for (ToolType toolType : tools) {
             if (toolType == ToolType.CALCULATE_DETERMINISTIC_RISK
                     || toolType == ToolType.VALIDATE_EVIDENCE_REFERENCES) {
                 continue;
             }
             runTool(review, toolType, context);
+            alreadyRun.add(toolType);
             context = buildContext(review, parseResult);
         }
+
+        if (review.isPackageImpactMode()) {
+            int maxRounds = investigationLoopService.maxFollowUpRounds();
+            for (int round = 1; round <= maxRounds; round++) {
+                transition(review, ReviewStage.ANALYZING_EVIDENCE,
+                        "Examining evidence for follow-up investigation round " + round,
+                        ActorType.SYSTEM);
+                List<ToolType> followUps = investigationLoopService.suggestFollowUpTools(review, alreadyRun);
+                if (followUps.isEmpty()) {
+                    break;
+                }
+                for (ToolType followUp : followUps) {
+                    if (!toolRegistry.isApproved(followUp) || alreadyRun.contains(followUp)) {
+                        continue;
+                    }
+                    String reason = investigationLoopService.reasonFor(followUp, review);
+                    transition(review, ReviewStage.EXECUTING_TOOLS, reason, ActorType.SYSTEM);
+                    log.info("Investigation follow-up round {}: {}", round, reason);
+                    runTool(review, followUp, buildContext(review, parseResult));
+                    alreadyRun.add(followUp);
+                }
+            }
+        }
+
         transition(review, ReviewStage.ANALYZING_EVIDENCE, "Analyzing tool evidence", ActorType.SYSTEM);
     }
 
@@ -379,13 +471,22 @@ public class ChangeAssuranceWorkflowService implements
                     .flatMap(f -> f.evidenceIds().stream())
                     .distinct()
                     .toList();
+            String description = missingRollbackObject
+                    ? "Confirm whether schema/package-spec/table changes were intentionally omitted from plans."
+                    : "Confirm whether the change description understates the SQL scope.";
+            String reason = missingRollbackObject
+                    ? "Rollback and scope contradictions prevent a safe readiness assessment."
+                    : "Scope contradictions prevent a safe readiness assessment.";
+            String question = missingRollbackObject
+                    ? "Were the table/package-specification changes intentional, and what is the complete rollback for each affected object?"
+                    : "Were all table/schema/package changes intentional, and does the description reflect full SQL scope?";
             gaps.add(new InformationGap(
                     new GapId(idGenerator.nextGapId()),
-                    "Confirm whether schema/package-spec/table changes were intentionally omitted from plans.",
-                    "Rollback and scope contradictions prevent a safe readiness assessment.",
+                    description,
+                    reason,
                     FindingSeverity.HIGH,
                     related,
-                    "Were the table/package-specification changes intentional, and what is the complete rollback for each affected object?",
+                    question,
                     InformationGapResolutionStatus.OPEN,
                     null
             ));
@@ -396,9 +497,9 @@ public class ChangeAssuranceWorkflowService implements
     }
 
     private boolean shouldAskClarification(ChangeReview review) {
-        return review.getUserAnswers().isEmpty()
-                && review.getInformationGaps().stream()
-                .anyMatch(g -> g.resolutionStatus() == InformationGapResolutionStatus.OPEN);
+        // Clarification round disabled: complete the review with open gaps recorded
+        // on the report instead of blocking on WAITING_FOR_INFORMATION.
+        return false;
     }
 
     private void askClarification(ChangeReview review) {
@@ -446,6 +547,14 @@ public class ChangeAssuranceWorkflowService implements
         // Evidence validation tool
         runTool(review, ToolType.VALIDATE_EVIDENCE_REFERENCES, buildContext(review, parseResult));
 
+        if (review.getPackageDbImpact() != null && review.getPackageDbImpact().packageFound()) {
+            PackageImpactAssessment impactAssessment =
+                    impactAssessmentCalculator.assess(
+                            review.getPackageDbImpact(),
+                            review.getPackageDeployDelta());
+            review.setPackageDbImpact(review.getPackageDbImpact().withImpactAssessment(impactAssessment));
+        }
+
         transition(review, ReviewStage.CALCULATING_RECOMMENDATION, "Calculating deterministic risk and recommendation", ActorType.SYSTEM);
         double coverage = evidenceCoverage(review);
         boolean rollbackGaps = review.getFindings().stream().anyMatch(f -> f.ruleCode().startsWith("RBK-001"));
@@ -468,6 +577,20 @@ public class ChangeAssuranceWorkflowService implements
         review.setReadinessRecommendation(recommendation);
         review.setDeterministicReasonCodes(buildReasonCodes(review, recommendation));
 
+        review.addAiContribution(new AiContributionEntry(
+                "Risk score and readiness recommendation",
+                "Compute numerical risk and GO / CONDITIONAL_GO / NO_GO recommendation",
+                AiContributionEntry.DETERMINISTIC_RULES,
+                "Policy engine set " + recommendation.name()
+                        + "; AI is not allowed to override this decision"
+        ));
+        review.addAiContribution(new AiContributionEntry(
+                "SQL safety and assurance tools",
+                "Parse uploaded SQL and run approved deterministic tools",
+                AiContributionEntry.DETERMINISTIC_RULES,
+                review.getFindings().size() + " finding(s) produced without executing change SQL"
+        ));
+
         // Ensure AI cannot override — already enforced by assigning only from policy
         transition(review, ReviewStage.COMPLETED, "Review completed for human approval", ActorType.SYSTEM);
     }
@@ -475,6 +598,9 @@ public class ChangeAssuranceWorkflowService implements
     private List<String> buildReasonCodes(ChangeReview review, ReadinessRecommendation recommendation) {
         List<String> codes = new ArrayList<>();
         codes.add("REC-" + recommendation.name());
+        if (review.getPackageDbImpact() != null && review.getPackageDbImpact().impactAssessment() != null) {
+            codes.add("IMPACT-" + review.getPackageDbImpact().impactAssessment().overallImpact().name());
+        }
         review.getFindings().stream()
                 .filter(f -> f.severity() == FindingSeverity.CRITICAL || f.severity() == FindingSeverity.HIGH)
                 .map(Finding::ruleCode)
@@ -484,13 +610,40 @@ public class ChangeAssuranceWorkflowService implements
     }
 
     private double evidenceCoverage(ChangeReview review) {
-        int required = 5;
+        if (isPackageImpactOnly(review)) {
+            if (review.getPackageDbImpact() == null || !review.getPackageDbImpact().packageFound()) {
+                return 0.2d;
+            }
+            double coverage = 0.55d;
+            var impact = review.getPackageDbImpact();
+            if (!impact.dependents().isEmpty() || !impact.dependencies().isEmpty()) {
+                coverage += 0.1d;
+            }
+            if (!impact.schedulerJobs().isEmpty() || !impact.transitiveDependents().isEmpty()) {
+                coverage += 0.1d;
+            }
+            if (impact.impactAssessment() != null) {
+                coverage += 0.05d;
+            }
+            return Math.min(coverage, 0.9d);
+        }
+        int required = 2;
         int present = 0;
         if (notBlank(review.getChangeDescription())) present++;
-        if (notBlank(review.getDeploymentPlan())) present++;
-        if (notBlank(review.getRollbackPlan())) present++;
-        if (notBlank(review.getTestEvidence())) present++;
         if (notBlank(review.getSqlContent())) present++;
+        // Deployment / rollback / test evidence are optional for current UI-driven reviews.
+        if (notBlank(review.getDeploymentPlan())) {
+            required++;
+            present++;
+        }
+        if (notBlank(review.getRollbackPlan())) {
+            required++;
+            present++;
+        }
+        if (notBlank(review.getTestEvidence())) {
+            required++;
+            present++;
+        }
         return (double) present / (double) required;
     }
 
@@ -511,11 +664,14 @@ public class ChangeAssuranceWorkflowService implements
     private void populateAffectedObjects(ChangeReview review, SqlParseResult parseResult) {
         for (SqlStatementInfo stmt : parseResult.statements()) {
             String objectType = mapObjectType(stmt.operationType());
-            for (String name : stmt.objectNames()) {
+            List<String> schemas = stmt.objectSchemas();
+            for (int i = 0; i < stmt.objectNames().size(); i++) {
+                String name = stmt.objectNames().get(i);
+                String schema = i < schemas.size() ? schemas.get(i) : null;
                 review.addAffectedObject(new AffectedObject(
                         name,
                         objectType,
-                        null,
+                        schema,
                         stmt.operationType().name(),
                         null
                 ));
@@ -542,16 +698,21 @@ public class ChangeAssuranceWorkflowService implements
     }
 
     private void validateCommand(SubmitChangeReviewCommand command) {
-        if (command.applicationName() == null || command.applicationName().isBlank()) {
-            throw new DomainValidationException("applicationName is required");
+        boolean hasPackage = notBlank(command.packageName());
+        boolean hasApp = notBlank(command.applicationName());
+        boolean hasTitle = notBlank(command.changeTitle());
+        boolean hasSql = command.sqlFileContent() != null && command.sqlFileContent().length > 0;
+        if (!hasPackage && (!hasApp || !hasTitle) && !hasSql) {
+            throw new DomainValidationException(
+                    "packageName is required, or both applicationName and changeTitle, or an SQL file with package DDL");
         }
-        if (command.changeTitle() == null || command.changeTitle().isBlank()) {
-            throw new DomainValidationException("changeTitle is required");
-        }
-        if (command.sqlFileContent() != null && command.sqlFileContent().length > 0
-                && (command.sqlOriginalFilename() == null || command.sqlOriginalFilename().isBlank())) {
+        if (hasSql && (command.sqlOriginalFilename() == null || command.sqlOriginalFilename().isBlank())) {
             throw new DomainValidationException("sqlFile original filename is required");
         }
+    }
+
+    private static boolean isPackageImpactOnly(ChangeReview review) {
+        return review.isPackageImpactMode() && !review.hasSubmittedChangePackageDocs();
     }
 
     private static ChangeType parseChangeType(String value) {
@@ -567,5 +728,9 @@ public class ChangeAssuranceWorkflowService implements
 
     private static boolean notBlank(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 }

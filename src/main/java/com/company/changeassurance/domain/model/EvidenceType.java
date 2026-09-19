@@ -7,6 +7,7 @@ public enum EvidenceType {
     TEST_EVIDENCE,
     SQL_FILE,
     SQL_STATEMENT,
+    PACKAGE_TARGET,
     TOOL_RESULT,
     USER_ANSWER,
     POLICY_RESULT,

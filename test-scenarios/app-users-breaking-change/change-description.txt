@@ -1,0 +1,1 @@
+Small non-breaking cleanup of APP.USERS. No data loss expected. Column tweaks only for housekeeping.

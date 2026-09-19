@@ -45,32 +45,37 @@ public class CompletenessTool implements AssuranceTool {
         check(findings, evidence, "PKG-001", "Missing change description", FindingSeverity.CRITICAL,
                 isBlank(ctx.review().getChangeDescription()),
                 "Provide a clear change description.", request);
-        check(findings, evidence, "PKG-002", "Missing deployment plan", FindingSeverity.CRITICAL,
-                isBlank(ctx.deploymentPlan()),
-                "Provide a deployment plan describing order and steps.", request);
-        check(findings, evidence, "PKG-003", "Missing rollback plan", FindingSeverity.CRITICAL,
-                isBlank(ctx.rollbackPlan()),
-                "Provide a rollback plan covering all modified objects.", request);
-        check(findings, evidence, "PKG-004", "Missing test evidence", FindingSeverity.HIGH,
-                isBlank(ctx.testEvidence()),
-                "Provide test evidence covering affected components.", request);
-        check(findings, evidence, "PKG-007", "Target environment not specified", FindingSeverity.HIGH,
-                isBlank(ctx.review().getTargetEnvironment()),
-                "Specify the target environment.", request);
-        check(findings, evidence, "PKG-008", "Execution responsibility not specified", FindingSeverity.MEDIUM,
-                !containsAny(ctx.deploymentPlan(), "responsible", "owner", "dba", "deployer", "team"),
-                "Identify who will execute the deployment.", request);
-        check(findings, evidence, "PKG-005", "Missing deployment verification", FindingSeverity.HIGH,
-                !containsAny(ctx.deploymentPlan(), "verif", "validat", "check", "smoke"),
-                "Add post-deployment verification steps.", request);
-        check(findings, evidence, "PKG-006", "Missing rollback verification", FindingSeverity.HIGH,
-                !containsAny(ctx.rollbackPlan(), "verif", "validat", "check"),
-                "Add rollback verification steps.", request);
 
-        boolean orderDescribed = containsAny(ctx.deploymentPlan(), "order", "sequence", "step 1", "first", "then");
-        if (!isBlank(ctx.deploymentPlan()) && !orderDescribed) {
-            check(findings, evidence, "PKG-009", "Deployment order not described", FindingSeverity.MEDIUM,
-                    true, "Describe deployment order explicitly.", request);
+        // Deployment / rollback / test / environment completeness is only evaluated
+        // when those artifacts were actually submitted (UI currently omits them).
+        if (!isBlank(ctx.deploymentPlan()) || !isBlank(ctx.rollbackPlan()) || !isBlank(ctx.testEvidence())) {
+            check(findings, evidence, "PKG-002", "Missing deployment plan", FindingSeverity.CRITICAL,
+                    isBlank(ctx.deploymentPlan()),
+                    "Provide a deployment plan describing order and steps.", request);
+            check(findings, evidence, "PKG-003", "Missing rollback plan", FindingSeverity.CRITICAL,
+                    isBlank(ctx.rollbackPlan()),
+                    "Provide a rollback plan covering all modified objects.", request);
+            check(findings, evidence, "PKG-004", "Missing test evidence", FindingSeverity.HIGH,
+                    isBlank(ctx.testEvidence()),
+                    "Provide test evidence covering affected components.", request);
+            check(findings, evidence, "PKG-007", "Target environment not specified", FindingSeverity.HIGH,
+                    isBlank(ctx.review().getTargetEnvironment()),
+                    "Specify the target environment.", request);
+            check(findings, evidence, "PKG-008", "Execution responsibility not specified", FindingSeverity.MEDIUM,
+                    !containsAny(ctx.deploymentPlan(), "responsible", "owner", "dba", "deployer", "team"),
+                    "Identify who will execute the deployment.", request);
+            check(findings, evidence, "PKG-005", "Missing deployment verification", FindingSeverity.HIGH,
+                    !containsAny(ctx.deploymentPlan(), "verif", "validat", "check", "smoke"),
+                    "Add post-deployment verification steps.", request);
+            check(findings, evidence, "PKG-006", "Missing rollback verification", FindingSeverity.HIGH,
+                    !containsAny(ctx.rollbackPlan(), "verif", "validat", "check"),
+                    "Add rollback verification steps.", request);
+
+            boolean orderDescribed = containsAny(ctx.deploymentPlan(), "order", "sequence", "step 1", "first", "then");
+            if (!isBlank(ctx.deploymentPlan()) && !orderDescribed) {
+                check(findings, evidence, "PKG-009", "Deployment order not described", FindingSeverity.MEDIUM,
+                        true, "Describe deployment order explicitly.", request);
+            }
         }
 
         return ToolExecutionResult.success(

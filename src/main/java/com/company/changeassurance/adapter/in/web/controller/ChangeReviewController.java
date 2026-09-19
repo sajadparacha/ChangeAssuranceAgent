@@ -3,6 +3,7 @@ package com.company.changeassurance.adapter.in.web.controller;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -20,6 +21,7 @@ import org.springframework.web.multipart.MultipartFile;
 import com.company.changeassurance.application.port.in.SubmitChangeReviewUseCase;
 import com.company.changeassurance.application.port.in.SubmitClarificationAnswerUseCase;
 import com.company.changeassurance.application.port.out.ActivityLogRepository;
+import com.company.changeassurance.application.service.HtmlImpactReportRenderer;
 import com.company.changeassurance.application.workflow.ChangeAssuranceWorkflowService;
 import com.company.changeassurance.domain.exception.DomainValidationException;
 import com.company.changeassurance.domain.model.ChangeReview;
@@ -36,20 +38,23 @@ public class ChangeReviewController {
 
     private final ChangeAssuranceWorkflowService workflowService;
     private final ActivityLogRepository activityLogRepository;
+    private final HtmlImpactReportRenderer htmlImpactReportRenderer;
 
     public ChangeReviewController(
             ChangeAssuranceWorkflowService workflowService,
-            ActivityLogRepository activityLogRepository
+            ActivityLogRepository activityLogRepository,
+            HtmlImpactReportRenderer htmlImpactReportRenderer
     ) {
         this.workflowService = workflowService;
         this.activityLogRepository = activityLogRepository;
+        this.htmlImpactReportRenderer = htmlImpactReportRenderer;
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(operationId = "submitChangeReview")
     public ResponseEntity<Map<String, Object>> submit(
-            @RequestParam("applicationName") String applicationName,
-            @RequestParam("changeTitle") String changeTitle,
+            @RequestParam(value = "applicationName", required = false) String applicationName,
+            @RequestParam(value = "changeTitle", required = false) String changeTitle,
             @RequestParam(value = "changeDescription", required = false) String changeDescription,
             @RequestParam(value = "changeType", required = false) String changeType,
             @RequestParam(value = "targetEnvironment", required = false) String targetEnvironment,
@@ -57,6 +62,10 @@ public class ChangeReviewController {
             @RequestParam(value = "deploymentPlan", required = false) String deploymentPlan,
             @RequestParam(value = "rollbackPlan", required = false) String rollbackPlan,
             @RequestParam(value = "testEvidence", required = false) String testEvidence,
+            @RequestParam(value = "aiModel", required = false) String aiModel,
+            @RequestParam(value = "aiProvider", required = false) String aiProvider,
+            @RequestParam(value = "packageName", required = false) String packageName,
+            @RequestParam(value = "schemaOwner", required = false) String schemaOwner,
             @RequestPart(value = "sqlFile", required = false) MultipartFile sqlFile
     ) throws Exception {
         byte[] sqlBytes = null;
@@ -76,7 +85,11 @@ public class ChangeReviewController {
                 rollbackPlan,
                 testEvidence,
                 sqlName,
-                sqlBytes
+                sqlBytes,
+                aiModel,
+                aiProvider,
+                packageName,
+                schemaOwner
         ));
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(Map.of(
                 "reviewId", result.reviewId().value(),
@@ -143,6 +156,19 @@ public class ChangeReviewController {
         return workflowService.getReport(new ReviewId(reviewId));
     }
 
+    @GetMapping(value = "/{reviewId}/report.html", produces = MediaType.TEXT_HTML_VALUE)
+    @Operation(operationId = "getChangeReviewHtmlReport")
+    public ResponseEntity<String> reportHtml(@PathVariable String reviewId) {
+        @SuppressWarnings("unchecked")
+        Map<String, Object> report = (Map<String, Object>) workflowService.getReport(new ReviewId(reviewId));
+        String html = htmlImpactReportRenderer.render(report);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "inline; filename=\"impact-report-" + reviewId + ".html\"")
+                .contentType(MediaType.TEXT_HTML)
+                .body(html);
+    }
+
     private ChangeReview require(String reviewId) {
         return workflowService.getById(new ReviewId(reviewId))
                 .orElseThrow(() -> new DomainValidationException("Review not found: " + reviewId));
@@ -182,6 +208,10 @@ public class ChangeReviewController {
                         ? ""
                         : review.getReadinessRecommendation().name()),
                 Map.entry("humanReviewStatus", review.getHumanReviewStatus().name()),
+                Map.entry("preferredAiModel", nullSafe(review.getPreferredAiModel())),
+                Map.entry("preferredAiProvider", nullSafe(review.getPreferredAiProvider())),
+                Map.entry("packageName", nullSafe(review.getPackageName())),
+                Map.entry("schemaOwner", nullSafe(review.getSchemaOwner())),
                 Map.entry("createdAt", review.getCreatedAt().toString()),
                 Map.entry("completedAt", review.getCompletedAt() == null ? "" : review.getCompletedAt().toString())
         );

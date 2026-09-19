@@ -19,7 +19,9 @@ import com.company.changeassurance.domain.model.AiTaskType;
 import com.company.changeassurance.domain.model.ChangeClassification;
 
 /**
- * ChatGPT (OpenAI) adapter via Spring AI. Fails closed when no API key / client is configured.
+ * OpenAI-compatible ModelGateway via Spring AI.
+ * Works with ChatGPT, Ollama, LM Studio, and other OpenAI-compatible local servers.
+ * Fails closed when no API key / client is configured.
  */
 public final class SpringAiModelGateway implements ModelGateway {
 
@@ -27,22 +29,41 @@ public final class SpringAiModelGateway implements ModelGateway {
 
     private final boolean enabled;
     private final String modelIdentifier;
+    private final String baseUrl;
     private final ChatClient chatClient;
 
     public SpringAiModelGateway(boolean enabled, String modelIdentifier) {
-        this(enabled, modelIdentifier, null);
+        this(enabled, modelIdentifier, null, null);
     }
 
     public SpringAiModelGateway(boolean enabled, String modelIdentifier, ChatClient chatClient) {
+        this(enabled, modelIdentifier, null, chatClient);
+    }
+
+    public SpringAiModelGateway(
+            boolean enabled,
+            String modelIdentifier,
+            String baseUrl,
+            ChatClient chatClient) {
         this.enabled = enabled && chatClient != null;
         this.modelIdentifier = modelIdentifier == null || modelIdentifier.isBlank() ? "gpt-4o-mini" : modelIdentifier;
+        this.baseUrl = normalizeBaseUrl(baseUrl);
         this.chatClient = chatClient;
     }
 
     /**
-     * Builds a live ChatGPT-backed gateway from an OpenAI API key.
+     * Builds a gateway against the default OpenAI API host.
      */
     public static SpringAiModelGateway create(String apiKey, String modelIdentifier) {
+        return create(apiKey, modelIdentifier, null);
+    }
+
+    /**
+     * Builds a live OpenAI-compatible gateway.
+     *
+     * @param baseUrl optional OpenAI-compatible base URL (e.g. {@code http://localhost:11434/v1} for Ollama)
+     */
+    public static SpringAiModelGateway create(String apiKey, String modelIdentifier, String baseUrl) {
         Objects.requireNonNull(apiKey, "apiKey");
         if (apiKey.isBlank()) {
             throw new IllegalArgumentException("apiKey must not be blank");
@@ -50,8 +71,13 @@ public final class SpringAiModelGateway implements ModelGateway {
         String model = modelIdentifier == null || modelIdentifier.isBlank() || "none".equalsIgnoreCase(modelIdentifier)
                 ? "gpt-4o-mini"
                 : modelIdentifier.trim();
+        String normalizedBaseUrl = normalizeBaseUrl(baseUrl);
 
-        OpenAiApi openAiApi = OpenAiApi.builder().apiKey(apiKey.trim()).build();
+        OpenAiApi.Builder apiBuilder = OpenAiApi.builder().apiKey(apiKey.trim());
+        if (normalizedBaseUrl != null) {
+            apiBuilder.baseUrl(normalizedBaseUrl);
+        }
+        OpenAiApi openAiApi = apiBuilder.build();
         OpenAiChatModel chatModel = OpenAiChatModel.builder()
                 .openAiApi(openAiApi)
                 .defaultOptions(OpenAiChatOptions.builder()
@@ -60,12 +86,17 @@ public final class SpringAiModelGateway implements ModelGateway {
                         .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
                         .build())
                 .build();
-        return new SpringAiModelGateway(true, model, ChatClient.create(chatModel));
+        return new SpringAiModelGateway(true, model, normalizedBaseUrl, ChatClient.create(chatModel));
     }
 
     @Override
     public boolean isAvailable() {
         return enabled;
+    }
+
+    @Override
+    public String defaultModel() {
+        return modelIdentifier;
     }
 
     @Override
@@ -75,9 +106,10 @@ public final class SpringAiModelGateway implements ModelGateway {
         Objects.requireNonNull(responseType, "responseType");
         if (!enabled || chatClient == null) {
             throw new AiUnavailableException(
-                    "ChatGPT gateway is not configured (model=" + modelIdentifier + ")");
+                    "OpenAI-compatible gateway is not configured (model=" + modelIdentifier + ")");
         }
 
+        String effectiveModel = resolveModel(request);
         String userContent = truncate(request.untrustedContent(), request.maxInputChars());
         int maxTokens = Math.max(256, Math.min(request.maxOutputChars(), 4000));
 
@@ -86,12 +118,7 @@ public final class SpringAiModelGateway implements ModelGateway {
                 ClassificationResponse parsed = chatClient.prompt()
                         .system(OpenAiTaskPrompts.systemPrompt(taskType))
                         .user(userContent)
-                        .options(OpenAiChatOptions.builder()
-                                .model(modelIdentifier)
-                                .maxTokens(maxTokens)
-                                .temperature(0.2d)
-                                .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
-                                .build())
+                        .options(chatOptions(effectiveModel, maxTokens))
                         .call()
                         .entity(ClassificationResponse.class);
                 return responseType.cast(parsed.toDomain());
@@ -100,12 +127,7 @@ public final class SpringAiModelGateway implements ModelGateway {
                 GapQuestionsResponse parsed = chatClient.prompt()
                         .system(OpenAiTaskPrompts.systemPrompt(taskType))
                         .user(userContent)
-                        .options(OpenAiChatOptions.builder()
-                                .model(modelIdentifier)
-                                .maxTokens(maxTokens)
-                                .temperature(0.2d)
-                                .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
-                                .build())
+                        .options(chatOptions(effectiveModel, maxTokens))
                         .call()
                         .entity(GapQuestionsResponse.class);
                 return responseType.cast(parsed.safeQuestions());
@@ -114,27 +136,53 @@ public final class SpringAiModelGateway implements ModelGateway {
             T parsed = chatClient.prompt()
                     .system(OpenAiTaskPrompts.systemPrompt(taskType))
                     .user(userContent)
-                    .options(OpenAiChatOptions.builder()
-                            .model(modelIdentifier)
-                            .maxTokens(maxTokens)
-                            .temperature(0.2d)
-                            .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
-                            .build())
+                    .options(chatOptions(effectiveModel, maxTokens))
                     .call()
                     .entity(responseType);
             return parsed;
         } catch (AiUnavailableException ex) {
             throw ex;
         } catch (RuntimeException ex) {
-            log.warn("ChatGPT call failed for task {} review {}: {}",
-                    taskType, request.reviewId(), ex.getMessage());
+            log.warn("Model call failed for task {} review {} (model={}, baseUrl={}): {}",
+                    taskType, request.reviewId(), effectiveModel, baseUrl == null ? "default" : baseUrl, ex.getMessage());
             throw new AiUnavailableException(
-                    "ChatGPT call failed for task " + taskType + ": " + safeMessage(ex), ex);
+                    "Model call failed for task " + taskType + ": " + safeMessage(ex), ex);
         }
     }
 
     public String modelIdentifier() {
         return modelIdentifier;
+    }
+
+    private String resolveModel(AiRequest request) {
+        if (request.modelOverride() != null && !request.modelOverride().isBlank()) {
+            return request.modelOverride().trim();
+        }
+        return modelIdentifier;
+    }
+
+    private static OpenAiChatOptions chatOptions(String model, int maxTokens) {
+        return OpenAiChatOptions.builder()
+                .model(model)
+                .maxTokens(maxTokens)
+                .temperature(0.2d)
+                .responseFormat(ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build())
+                .build();
+    }
+
+    public String baseUrl() {
+        return baseUrl;
+    }
+
+    public static String normalizeBaseUrl(String baseUrl) {
+        if (baseUrl == null || baseUrl.isBlank()) {
+            return null;
+        }
+        String trimmed = baseUrl.trim();
+        while (trimmed.endsWith("/")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return trimmed.isBlank() ? null : trimmed;
     }
 
     private static String truncate(String content, int maxChars) {

@@ -1,5 +1,6 @@
 import { Observable } from 'rxjs';
 import {
+  AiConfig,
   ChangeAssuranceReport,
   ChangeReview,
   ChangeReviewSummary,
@@ -12,6 +13,7 @@ import {
 } from '../models/change-review.models';
 
 export abstract class ChangeReviewRepository {
+  abstract getAiConfig(): Observable<AiConfig>;
   abstract submitReview(request: SubmitChangeReviewRequest): Observable<SubmitChangeReviewResponse>;
   abstract getReview(reviewId: string): Observable<ChangeReview>;
   abstract getReviewPlan(reviewId: string): Observable<ReviewPlan>;

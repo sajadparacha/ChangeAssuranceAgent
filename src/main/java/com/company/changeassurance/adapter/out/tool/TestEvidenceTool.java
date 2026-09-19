@@ -45,9 +45,8 @@ public class TestEvidenceTool implements AssuranceTool {
         String tests = nullToEmpty(ctx.testEvidence()).toLowerCase(Locale.ROOT);
 
         if (tests.isBlank()) {
-            add(findings, evidence, "TST-000", "Test evidence missing", FindingSeverity.HIGH,
-                    "No test evidence was provided.", "Provide detailed test evidence.");
-            return ToolExecutionResult.success(findings, evidence, "Test evidence missing.");
+            return ToolExecutionResult.success(List.of(), List.of(),
+                    "Test evidence was not provided; coverage analysis skipped.");
         }
 
         for (AffectedObject obj : ctx.affectedObjects()) {

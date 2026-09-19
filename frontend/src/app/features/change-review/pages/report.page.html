@@ -1,39 +1,512 @@
-<section class="page">
-  <h1>Assurance report</h1>
-  <a routerLink="/reviews">Back to history</a>
+<section class="report">
+  <header class="report-hero">
+    <div class="report-hero__copy">
+      <p class="eyebrow">Change assurance report</p>
+      @if (facade.report(); as report) {
+        <h1>{{ reportTitle(report) }}</h1>
+        <p class="subtitle">{{ reportSubtitle(report) }}</p>
+        <p class="meta-line">
+          Review {{ identification(report)['reviewId'] || '—' }}
+          @if (identification(report)['application']) {
+            <span>· {{ identification(report)['application'] }}</span>
+          }
+          @if (identification(report)['environment']) {
+            <span>· {{ identification(report)['environment'] }}</span>
+          }
+        </p>
+      } @else {
+        <h1>Loading report…</h1>
+      }
+    </div>
+    <div class="report-hero__actions">
+      @if (facade.report(); as report) {
+        <a class="btn btn-primary" [href]="htmlReportUrl(report)" target="_blank" rel="noopener">Download HTML</a>
+      }
+      <a class="btn btn-ghost" routerLink="/reviews">Back to history</a>
+    </div>
+  </header>
+
+  @if (facade.error(); as err) {
+    <p class="banner banner-error" role="alert">{{ err }}</p>
+  }
+
   @if (facade.report(); as report) {
-    <mat-card>
-      <mat-card-title>Executive summary</mat-card-title>
-      <mat-card-content>
-        <p>{{ report.executiveSummary }}</p>
-        <p><strong>Recommendation:</strong> {{ report.recommendation.value }}</p>
-        <p><strong>Human approval required:</strong> {{ report.humanApprovalRequired }}</p>
-      </mat-card-content>
-    </mat-card>
+    <nav class="toc" aria-label="Report sections">
+      <button type="button" class="toc-link" (click)="scrollToSection('assessment')">Assessment</button>
+      <button type="button" class="toc-link" (click)="scrollToSection('findings')">Findings</button>
+      @if (affectedObjects(report).length > 0) {
+        <button type="button" class="toc-link" (click)="scrollToSection('objects')">Objects</button>
+      }
+      @if (hasPackageCatalog(report)) {
+        <button type="button" class="toc-link" (click)="scrollToSection('catalog')">Catalog</button>
+      }
+      <button type="button" class="toc-link" (click)="scrollToSection('next')">Next steps</button>
+      @if (report.aiContribution) {
+        <button type="button" class="toc-link" (click)="scrollToSection('ai')">AI role</button>
+      }
+      <button type="button" class="toc-link" (click)="scrollToSection('limits')">Limits</button>
+    </nav>
 
-    <h2>Risk assessment</h2>
-    <pre>{{ report.riskAssessment | json }}</pre>
+    <section id="assessment" class="panel panel-verdict">
+      <div class="panel-head">
+        <p class="step">01</p>
+        <h2>Executive assessment</h2>
+      </div>
+      <p class="lead">{{ report.executiveSummary }}</p>
 
-    <h2>Findings by severity</h2>
-    @for (entry of report.findingsBySeverity | keyvalue; track entry.key) {
-      <h3>{{ entry.key }}</h3>
-      <ul>
-        @for (f of entry.value; track $index) {
-          <li>{{ f.ruleCode }} — {{ f.title }}</li>
+      <div class="verdict-grid">
+        @if (hasPackageCatalog(report) && report.databaseImpact?.overallImpact; as overall) {
+          <article class="metric">
+            <span class="metric-label">Overall impact</span>
+            <span class="metric-value pill" [class]="impactClass(overall)">{{ overall }}</span>
+          </article>
         }
-      </ul>
+        <article class="metric metric-emphasis">
+          <span class="metric-label">Recommendation</span>
+          <span class="metric-value pill" [class]="recommendationClass(report.recommendation.value)">
+            {{ report.recommendation.value || 'PENDING' }}
+          </span>
+        </article>
+        @if (risk(report); as riskAssessment) {
+          <article class="metric">
+            <span class="metric-label">Risk level</span>
+            <span class="metric-value pill" [class]="riskClass(riskAssessment.riskLevel)">
+              {{ riskAssessment.riskLevel }}
+              <span class="muted">· {{ riskAssessment.numericalScore }}</span>
+            </span>
+          </article>
+          <article class="metric">
+            <span class="metric-label">Evidence coverage</span>
+            <span class="metric-value">{{ coveragePercent(riskAssessment.evidenceCoverageScore) }}</span>
+          </article>
+        }
+        <article class="metric">
+          <span class="metric-label">Human approval</span>
+          <span class="metric-value">{{ report.humanApprovalRequired ? 'Required' : 'Not required' }}</span>
+        </article>
+      </div>
+
+      @if (risk(report)?.explanation) {
+        <p class="callout">{{ risk(report)!.explanation }}</p>
+      }
+      @if (report.databaseImpact?.deployChange; as deploy) {
+        @if (deploy.changeKind && deploy.changeKind !== 'UNKNOWN') {
+          <p class="callout callout-quiet">
+            Deploy script change:
+            <strong>{{ deploy.changeKind }}</strong>
+            @if (deploy.specChanged) { (specification / API) }
+            @else if (deploy.bodyChanged) { (body only) }
+          </p>
+        }
+      }
+    </section>
+
+    <section id="findings" class="panel">
+      <div class="panel-head">
+        <p class="step">02</p>
+        <div>
+          <h2>Findings</h2>
+          <p class="lead">Issues discovered during the review, ordered by severity.</p>
+        </div>
+      </div>
+
+      @if (orderedFindings(report).length === 0) {
+        <p class="empty-state">No findings were raised.</p>
+      } @else {
+        @for (group of orderedFindings(report); track group.severity) {
+          <div class="finding-group">
+            <div class="finding-group__head">
+              <span class="sev-pill" [class]="severityClass(group.severity)">{{ group.severity }}</span>
+              <span class="muted">{{ group.findings.length }} item(s)</span>
+            </div>
+            <div class="finding-stack">
+              @for (f of group.findings; track $index) {
+                <article class="finding-card">
+                  <header>
+                    <strong>{{ f.title }}</strong>
+                    <span class="code">{{ f.ruleCode }}</span>
+                  </header>
+                  <p>{{ f.description }}</p>
+                  @if (sqlHighlight(report, f); as sql) {
+                    <figure class="sql-hit" aria-label="SQL statement for this finding">
+                      <figcaption>
+                        <span class="sql-hit__label">SQL</span>
+                        @if (sql.line != null) {
+                          <span class="sql-hit__line">Line {{ sql.line }}</span>
+                        }
+                      </figcaption>
+                      <pre class="sql-hit__code"><code>{{ sql.snippet }}</code></pre>
+                    </figure>
+                  }
+                  @if (f.requiredAction) {
+                    <p class="action"><span>Next step</span> {{ f.requiredAction }}</p>
+                  }
+                </article>
+              }
+            </div>
+          </div>
+        }
+      }
+    </section>
+
+    @if (affectedObjects(report).length > 0) {
+      <section id="objects" class="panel">
+        <div class="panel-head">
+          <p class="step">03</p>
+          <div>
+            <h2>Objects touched by the change script</h2>
+            <p class="lead">Parsed from uploaded SQL — not executed against the database.</p>
+          </div>
+        </div>
+        <ul class="object-list">
+          @for (o of affectedObjects(report); track objectLabel(o) + o.objectType + o.changeKind) {
+            <li>
+              <span class="obj-name">{{ objectLabel(o) }}</span>
+              <span class="obj-meta">
+                <span class="obj-type">{{ o.objectType }}</span>
+                @if (o.changeKind) {
+                  <span class="muted">{{ o.changeKind }}</span>
+                }
+              </span>
+            </li>
+          }
+        </ul>
+      </section>
     }
 
-    <h2>Risk scenarios (hypotheses)</h2>
-    <pre>{{ report.riskScenarios | json }}</pre>
+    @if (hasPackageCatalog(report) && report.databaseImpact; as impact) {
+      <section class="panel">
+        <div class="panel-head">
+          <p class="step">04</p>
+          <h2>Why this impact level?</h2>
+        </div>
+        @if ((impact.why?.length ?? 0) > 0) {
+          <ul class="plain-list">
+            @for (reason of impact.why; track reason) {
+              <li>{{ reason }}</li>
+            }
+          </ul>
+        } @else {
+          <p class="empty-state">No deterministic catalog impact reasons were recorded.</p>
+        }
+      </section>
 
-    <h2>Required actions</h2>
-    <ul>@for (a of report.requiredActions; track a) { <li>{{ a }}</li> }</ul>
+      <section class="panel">
+        <div class="panel-head">
+          <p class="step">05</p>
+          <h2>Recommended testing</h2>
+        </div>
+        <ul class="plain-list">
+          @for (t of impact.recommendedTesting ?? report.suggestedTests; track t) {
+            <li>{{ t }}</li>
+          } @empty {
+            <li class="empty">None listed</li>
+          }
+        </ul>
+      </section>
 
-    <h2>Limitations</h2>
-    <ul>@for (l of report.limitations; track l) { <li>{{ l }}</li> }</ul>
+      <section id="catalog" class="panel">
+        <div class="panel-head">
+          <p class="step">06</p>
+          <div>
+            <h2>Oracle catalog evidence</h2>
+            <p class="lead">Read-only catalog facts for dependents, jobs, and related object health.</p>
+          </div>
+        </div>
+        <div class="meta-row">
+          <span>{{ catalogLabel(impact) }}</span>
+          @if (impact.package; as pkg) {
+            <span>Status <strong>{{ pkg.status }}</strong></span>
+            <span>Spec {{ pkg.specPresent ? 'present' : 'missing' }}</span>
+            <span>Body {{ pkg.bodyPresent ? 'present' : 'missing' }}</span>
+          }
+        </div>
 
-    <h2>Critic review</h2>
-    <pre>{{ report.criticReview | json }}</pre>
+        @if (impact.blastRadius; as blast) {
+          <div class="stat-row">
+            <div class="stat"><strong>{{ blast.procedureCount }}</strong><span>routines</span></div>
+            <div class="stat"><strong>{{ blast.dependencyCount }}</strong><span>dependencies</span></div>
+            <div class="stat"><strong>{{ blast.dependentCount }}</strong><span>dependents</span></div>
+            <div class="stat"><strong>{{ blast.transitiveCount ?? 0 }}</strong><span>transitive</span></div>
+            <div class="stat"><strong>{{ blast.schedulerJobCount ?? 0 }}</strong><span>jobs</span></div>
+          </div>
+        }
+
+        <div class="impact-columns">
+          <div class="subpanel">
+            <h3>This package uses</h3>
+            <ul class="object-list">
+              @for (o of impact.dependencies ?? []; track o.qualifiedName + o.objectType) {
+                <li>
+                  <span class="obj-name">{{ o.qualifiedName }}</span>
+                  <span class="obj-meta">
+                    <span class="obj-type">{{ o.objectType }}</span>
+                    @if (o.status) {
+                      <span class="muted">{{ o.status }}</span>
+                    }
+                  </span>
+                </li>
+              } @empty {
+                <li class="empty">No dependencies listed</li>
+              }
+            </ul>
+          </div>
+          <div class="subpanel">
+            <h3>Depends on this package</h3>
+            <ul class="object-list">
+              @for (o of impact.dependents ?? []; track o.qualifiedName + o.objectType) {
+                <li>
+                  <span class="obj-name">{{ o.qualifiedName }}</span>
+                  <span class="obj-meta">
+                    <span class="obj-type">{{ o.objectType }}</span>
+                    @if (o.status) {
+                      <span class="muted">{{ o.status }}</span>
+                    }
+                  </span>
+                </li>
+              } @empty {
+                <li class="empty">No dependents listed</li>
+              }
+            </ul>
+          </div>
+        </div>
+
+        @if ((impact.transitiveDependents?.length ?? 0) > 0) {
+          <h3>Transitive dependents</h3>
+          <ul class="object-list">
+            @for (o of impact.transitiveDependents; track o.qualifiedName + o.objectType + o.depth) {
+              <li>
+                <span class="obj-name">{{ o.qualifiedName }}</span>
+                <span class="obj-meta">
+                  <span class="obj-type">{{ o.objectType }}</span>
+                  <span class="muted">depth {{ o.depth }}</span>
+                </span>
+              </li>
+            }
+          </ul>
+        }
+
+        @if ((impact.schedulerJobs?.length ?? 0) > 0) {
+          <h3>Scheduler jobs</h3>
+          <ul class="object-list">
+            @for (j of impact.schedulerJobs; track j.qualifiedName) {
+              <li>
+                <span class="obj-name">{{ j.qualifiedName }}</span>
+                <span class="obj-meta">
+                  <span class="obj-type">{{ j.jobType }}</span>
+                  <span class="muted">{{ j.enabled }} / {{ j.state }}</span>
+                </span>
+              </li>
+            }
+          </ul>
+        }
+
+        @if ((impact.invalidRelatedObjects?.length ?? 0) > 0) {
+          <h3>Invalid related objects</h3>
+          <ul class="object-list">
+            @for (o of impact.invalidRelatedObjects; track o.qualifiedName + o.objectType) {
+              <li>
+                <span class="obj-name">{{ o.qualifiedName }}</span>
+                <span class="obj-meta">
+                  <span class="obj-type">{{ o.objectType }}</span>
+                  <span class="muted">{{ o.status }}</span>
+                </span>
+              </li>
+            }
+          </ul>
+        }
+
+        @if ((impact.sourceReferences?.length ?? 0) > 0) {
+          <h3>Source references</h3>
+          <ul class="object-list">
+            @for (s of impact.sourceReferences; track s.qualifiedName + s.line) {
+              <li>
+                <span class="obj-name">{{ s.qualifiedName }}:{{ s.line }}</span>
+                <span class="muted excerpt">{{ s.excerpt }}</span>
+              </li>
+            }
+          </ul>
+        }
+
+        <h3>Routines</h3>
+        <ul class="chip-list">
+          @for (p of impact.procedures ?? []; track p.name) {
+            <li><span class="chip">{{ p.name }}</span> <span class="muted">{{ p.procedureType }}</span></li>
+          } @empty {
+            <li class="empty">No procedures or functions listed</li>
+          }
+        </ul>
+      </section>
+    } @else if (!hasPackageCatalog(report) && report.suggestedTests.length > 0) {
+      <section class="panel">
+        <div class="panel-head">
+          <p class="step">04</p>
+          <h2>Suggested tests</h2>
+        </div>
+        <ul class="plain-list">
+          @for (t of report.suggestedTests; track t) {
+            <li>{{ t }}</li>
+          }
+        </ul>
+      </section>
+    }
+
+    @if (report.informationGaps.length > 0) {
+      <section class="panel">
+        <div class="panel-head">
+          <p class="step">·</p>
+          <h2>Information gaps</h2>
+        </div>
+        <ul class="plain-list">
+          @for (g of report.informationGaps; track $index) {
+            <li>
+              <strong>{{ g.description }}</strong>
+              @if (g.suggestedQuestion) {
+                <span class="muted"> — {{ g.suggestedQuestion }}</span>
+              }
+            </li>
+          }
+        </ul>
+      </section>
+    }
+
+    @if (scenarios(report).length > 0) {
+      <section class="panel">
+        <div class="panel-head">
+          <p class="step">·</p>
+          <div>
+            <h2>What could go wrong</h2>
+            <p class="lead">Hypotheses to validate before approving — not proven defects.</p>
+          </div>
+        </div>
+        <div class="scenario-stack">
+          @for (s of scenarios(report); track scenarioId(s)) {
+            <article class="scenario-card">
+              <header>
+                <strong>{{ s.title }}</strong>
+                @if (s.hypothesis) {
+                  <span class="tag">Hypothesis</span>
+                }
+              </header>
+              <p>{{ s.description }}</p>
+              @if (s.eventSequence?.length) {
+                <ol>
+                  @for (step of s.eventSequence; track $index) {
+                    <li>{{ step }}</li>
+                  }
+                </ol>
+              }
+              @if (s.requiredValidation) {
+                <p class="action"><span>Validate by</span> {{ s.requiredValidation }}</p>
+              }
+            </article>
+          }
+        </div>
+      </section>
+    }
+
+    <section id="next" class="panel">
+      <div class="panel-head">
+        <p class="step">·</p>
+        <h2>What to do next</h2>
+      </div>
+      <div class="next-grid">
+        <div class="subpanel">
+          <h3>Required actions</h3>
+          <ul class="plain-list">
+            @for (a of report.requiredActions; track a) {
+              <li>{{ a }}</li>
+            } @empty {
+              <li class="empty">None listed</li>
+            }
+          </ul>
+        </div>
+        <div class="subpanel">
+          <h3>Questions for the human reviewer</h3>
+          <ul class="plain-list">
+            @for (q of report.humanReviewQuestions; track q) {
+              <li>{{ q }}</li>
+            } @empty {
+              <li class="empty">None listed</li>
+            }
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    @if (critic(report); as criticReview) {
+      <section class="panel">
+        <div class="panel-head">
+          <p class="step">·</p>
+          <h2>Independent check</h2>
+        </div>
+        <p class="lead">{{ criticReview.summary || 'Critic review completed.' }}</p>
+        <div class="meta-row">
+          <span>Status <strong>{{ criticReview.availabilityStatus || 'UNKNOWN' }}</strong></span>
+          <span>{{ criticReview.accepted ? 'Accepted' : 'Needs attention' }}</span>
+        </div>
+      </section>
+    }
+
+    @if (report.aiContribution; as ai) {
+      <section id="ai" class="panel">
+        <div class="panel-head">
+          <p class="step">·</p>
+          <div>
+            <h2>AI contribution</h2>
+            <p class="lead">{{ ai.summary }}</p>
+          </div>
+        </div>
+        <div class="meta-row">
+          @if (ai.selectedProvider) {
+            <span>Provider <strong>{{ ai.selectedProvider }}</strong></span>
+          }
+          @if (ai.selectedModel) {
+            <span>Model <strong>{{ ai.selectedModel }}</strong></span>
+          }
+          @if (ai.promptVersion) {
+            <span>Prompt <strong>{{ ai.promptVersion }}</strong></span>
+          }
+          <span>Live model tasks <strong>{{ ai.liveModelTasks ?? 0 }}</strong></span>
+        </div>
+        <ul class="object-list">
+          @for (t of ai.tasks ?? []; track t.taskName + t.howExecuted) {
+            <li>
+              <span class="obj-name">{{ t.taskName }}</span>
+              <span class="obj-meta">
+                <span class="obj-type">{{ t.howExecuted }}</span>
+              </span>
+              <span class="muted excerpt">{{ t.purpose }} — {{ t.outcome }}</span>
+            </li>
+          }
+        </ul>
+        @if (ai.cannotOverride && ai.cannotOverride.length > 0) {
+          <h3>AI cannot override</h3>
+          <ul class="plain-list">
+            @for (item of ai.cannotOverride; track item) {
+              <li>{{ item }}</li>
+            }
+          </ul>
+        }
+      </section>
+    }
+
+    <section id="limits" class="panel panel-limits">
+      <div class="panel-head">
+        <p class="step">·</p>
+        <div>
+          <h2>Limitations</h2>
+          <p class="lead">Keep these boundaries in mind when deciding.</p>
+        </div>
+      </div>
+      <ul class="plain-list">
+        @for (l of report.limitations; track l) {
+          <li>{{ l }}</li>
+        }
+      </ul>
+      <p class="review-id muted">Generated for human decision support · Review {{ identification(report)['reviewId'] }}</p>
+    </section>
+  } @else if (!facade.error()) {
+    <p class="empty-state">Loading report…</p>
   }
 </section>
